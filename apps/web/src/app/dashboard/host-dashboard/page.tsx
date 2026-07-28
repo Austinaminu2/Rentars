@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Plus } from 'lucide-react';
 import BookingStats from './components/BookingStats';
 import EarningsStats from './components/EarningsStats';
+import EarningsSummary from './components/EarningsSummary';
 import PaymentMethods from './components/PaymentMethods';
 import PayoutHistory from './components/PayoutHistory';
 import RecentTransactions from './components/RecentTransactions';
@@ -71,6 +72,9 @@ export default function HostDashboard() {
         {/* Stats */}
         <BookingStats {...mockHostData.bookingStats} />
         <EarningsStats {...mockHostData.earningsStats} />
+
+        {/* Earnings breakdown with period selector */}
+        <EarningsSummary />
 
         {/* Analytics */}
         <EarningsTrendChart data={mockHostData.monthlyMetrics} />

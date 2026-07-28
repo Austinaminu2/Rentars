@@ -100,12 +100,22 @@ export default function BookingConfirmationPage({
             <p className="font-semibold text-gray-900 dark:text-white">
               {new Date(booking.check_in).toLocaleDateString()}
             </p>
+            {(property as Property & { check_in_time?: string })?.check_in_time && (
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                from {(property as Property & { check_in_time?: string }).check_in_time}
+              </p>
+            )}
           </div>
           <div>
             <p className="text-sm text-gray-600 dark:text-gray-400">Check-out</p>
             <p className="font-semibold text-gray-900 dark:text-white">
               {new Date(booking.check_out).toLocaleDateString()}
             </p>
+            {(property as Property & { check_out_time?: string })?.check_out_time && (
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                by {(property as Property & { check_out_time?: string }).check_out_time}
+              </p>
+            )}
           </div>
           <div>
             <p className="text-sm text-gray-600 dark:text-gray-400">Guests</p>

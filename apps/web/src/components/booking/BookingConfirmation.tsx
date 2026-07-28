@@ -8,6 +8,8 @@ interface BookingConfirmationProps {
   checkIn: string;
   checkOut: string;
   totalPrice: number;
+  checkInTime?: string;
+  checkOutTime?: string;
 }
 
 export default function BookingConfirmation({
@@ -16,6 +18,8 @@ export default function BookingConfirmation({
   checkIn,
   checkOut,
   totalPrice,
+  checkInTime,
+  checkOutTime,
 }: BookingConfirmationProps) {
   return (
     <div className="bg-white dark:bg-gray-900 rounded-lg shadow-md p-8 text-center space-y-4">
@@ -34,11 +38,15 @@ export default function BookingConfirmation({
         </div>
         <div className="flex justify-between">
           <span className="text-gray-600 dark:text-gray-400">Check-in:</span>
-          <span className="text-gray-900 dark:text-gray-100">{new Date(checkIn).toLocaleDateString()}</span>
+          <span className="text-gray-900 dark:text-gray-100">
+            {new Date(checkIn).toLocaleDateString()}{checkInTime ? ` at ${checkInTime}` : ''}
+          </span>
         </div>
         <div className="flex justify-between">
           <span className="text-gray-600 dark:text-gray-400">Check-out:</span>
-          <span className="text-gray-900 dark:text-gray-100">{new Date(checkOut).toLocaleDateString()}</span>
+          <span className="text-gray-900 dark:text-gray-100">
+            {new Date(checkOut).toLocaleDateString()}{checkOutTime ? ` at ${checkOutTime}` : ''}
+          </span>
         </div>
         <div className="border-t border-gray-200 dark:border-gray-700 pt-2 flex justify-between font-semibold">
           <span className="text-gray-900 dark:text-gray-100">Total:</span>

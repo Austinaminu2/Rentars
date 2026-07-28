@@ -4,17 +4,25 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Booking } from '@/types/booking';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
-// Use the versioned API path
 const BOOKINGS_URL = `${API_URL}/api/v1/bookings`;
+
+export type BookingStatus = 'pending' | 'confirmed' | 'completed' | 'cancelled' | 'disputed' | null;
+export type BookingSort = 'date' | 'price' | 'created';
+export type BookingOrder = 'asc' | 'desc';
 
 /**
  * useDashboard — fetches the current user's bookings with cursor-based
- * pagination so the list stays consistent under concurrent writes.
+ * pagination, optional status filter, and sort controls.
  *
  * Call `loadMore()` to append the next page. `hasMore` indicates whether
  * another page is available.
  */
-export function useDashboard(pageSize = 20) {
+export function useDashboard(
+  pageSize = 20,
+  statusFilter: BookingStatus = null,
+  sort: BookingSort = 'created',
+  order: BookingOrder = 'desc',
+) {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -41,8 +49,9 @@ export function useDashboard(pageSize = 20) {
       }
 
       try {
-        const params = new URLSearchParams({ limit: String(pageSize) });
+        const params = new URLSearchParams({ limit: String(pageSize), sort, order });
         if (cursor) params.set('cursor', cursor);
+        if (statusFilter) params.set('status', statusFilter);
 
         const res = await fetch(`${BOOKINGS_URL}?${params.toString()}`, {
           headers: { Authorization: `Bearer ${token}` },
@@ -80,12 +89,11 @@ export function useDashboard(pageSize = 20) {
         else setIsLoadingMore(false);
       }
     },
-    [pageSize],
+    [pageSize, statusFilter, sort, order],
   );
 
   useEffect(() => {
-    if (initialFetched.current) return;
-    initialFetched.current = true;
+    initialFetched.current = false;
     fetchPage(null, true);
   }, [fetchPage]);
 

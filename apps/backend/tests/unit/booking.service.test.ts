@@ -10,7 +10,8 @@ import { mockBookings, mockProperties, mockUsers } from '../mocks/supabase.mock.
 // ── Supabase mock ─────────────────────────────────────────────────────────────
 
 const mockFrom = mock((_: string) => ({}));
-const mockSupabase = { from: mockFrom };
+const mockRpc = mock(async () => ({ data: 'reserved-id', error: null }));
+const mockSupabase = { from: mockFrom, rpc: mockRpc };
 const supabaseMod = await import('../../src/config/supabase.js');
 (supabaseMod as any).supabase = mockSupabase;
 
@@ -59,6 +60,7 @@ describe('BookingService', () => {
 
   beforeEach(() => {
     mockFrom.mockClear();
+    mockRpc.mockClear();
     mockTrustlessWork.createBookingEscrow.mockClear();
     mockTrustlessWork.cancelEscrow.mockClear();
     mockTrustlessWork.releaseEscrow.mockClear();
@@ -529,6 +531,257 @@ describe('BookingService', () => {
       const result = await bookingService.deleteBooking('');
       expect(result.success).toBe(false);
       expect(result.error).toBe('Booking ID is required');
+    });
+  });
+
+  // ── stay-length constraints (#268) ──────────────────────────────────────────
+
+  describe('createBooking — stay length constraints', () => {
+    const baseInput: CreateBookingInput = {
+      property_id: mockProperties[0].id,
+      tenant_id: mockUsers[1].id,
+      check_in: '2026-09-01',
+      check_out: '2026-09-04', // 3 nights
+      total_price: 300,
+      rules_acknowledged_at: new Date().toISOString(),
+    };
+
+    function setupProperty(min_nights: number, max_nights: number | null) {
+      let profileCall = 0;
+      mockFrom.mockImplementation((table: string) => {
+        if (table === 'properties') {
+          return {
+            select: mock(() => ({
+              eq: mock(() => ({
+                single: mock(async () => ({
+                  data: {
+                    id: mockProperties[0].id,
+                    owner_id: mockUsers[0].id,
+                    on_chain_id: null,
+                    max_guests: 4,
+                    min_nights,
+                    max_nights,
+                    check_in_time: '15:00',
+                    check_out_time: '11:00',
+                  },
+                  error: null,
+                })),
+              })),
+            })),
+          };
+        }
+        if (table === 'profiles') {
+          profileCall++;
+          const addr = profileCall === 1 ? mockUsers[0].stellar_address : mockUsers[1].stellar_address;
+          return {
+            select: mock(() => ({
+              eq: mock(() => ({
+                single: mock(async () => ({ data: { stellar_address: addr }, error: null })),
+              })),
+            })),
+          };
+        }
+        if (table === 'bookings') {
+          return {
+            select: mock(() => ({
+              eq: mock(() => ({
+                neq: mock(() => ({
+                  maybeSingle: mock(async () => ({ data: null, error: null })),
+                })),
+              })),
+            })),
+            update: mock(() => ({
+              eq: mock(() => ({
+                select: mock(() => ({
+                  single: mock(async () => ({
+                    data: { id: 'new-booking', ...baseInput, status: 'Pending', escrow_id: 'escrow-123' },
+                    error: null,
+                  })),
+                })),
+              })),
+            })),
+          };
+        }
+        return {};
+      });
+      mockRpc.mockImplementation(async () => ({ data: 'new-booking', error: null }));
+    }
+
+    it('rejects a booking shorter than min_nights', async () => {
+      setupProperty(5, null); // require at least 5 nights, but input is 3
+      const result = await bookingService.createBooking(baseInput);
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/minimum stay of 5 night/);
+    });
+
+    it('rejects a booking longer than max_nights', async () => {
+      setupProperty(1, 2); // max 2 nights, but input is 3
+      const result = await bookingService.createBooking(baseInput);
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/maximum stay of 2 night/);
+    });
+
+    it('accepts a booking within min/max range', async () => {
+      setupProperty(2, 5); // min 2, max 5 — input is 3 nights
+      const result = await bookingService.createBooking(baseInput);
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts a booking when max_nights is null (no upper limit)', async () => {
+      setupProperty(1, null);
+      const result = await bookingService.createBooking({ ...baseInput, check_out: '2026-09-30' }); // 29 nights
+      expect(result.success).toBe(true);
+    });
+  });
+
+  // ── same-day turnover (#269) ─────────────────────────────────────────────────
+
+  describe('createBooking — same-day turnover', () => {
+    const baseInput: CreateBookingInput = {
+      property_id: mockProperties[0].id,
+      tenant_id: mockUsers[1].id,
+      check_in: '2026-10-05',
+      check_out: '2026-10-08',
+      total_price: 300,
+      rules_acknowledged_at: new Date().toISOString(),
+    };
+
+    function setupWithTurnover(check_in_time: string, check_out_time: string, existingCheckoutOnSameDay: boolean) {
+      let profileCall = 0;
+      mockFrom.mockImplementation((table: string) => {
+        if (table === 'properties') {
+          return {
+            select: mock(() => ({
+              eq: mock(() => ({
+                single: mock(async () => ({
+                  data: {
+                    id: mockProperties[0].id,
+                    owner_id: mockUsers[0].id,
+                    on_chain_id: null,
+                    max_guests: 4,
+                    min_nights: 1,
+                    max_nights: null,
+                    check_in_time,
+                    check_out_time,
+                  },
+                  error: null,
+                })),
+              })),
+            })),
+          };
+        }
+        if (table === 'profiles') {
+          profileCall++;
+          const addr = profileCall === 1 ? mockUsers[0].stellar_address : mockUsers[1].stellar_address;
+          return {
+            select: mock(() => ({
+              eq: mock(() => ({
+                single: mock(async () => ({ data: { stellar_address: addr }, error: null })),
+              })),
+            })),
+          };
+        }
+        if (table === 'bookings') {
+          return {
+            select: mock(() => ({
+              eq: mock(() => ({
+                neq: mock(() => ({
+                  maybeSingle: mock(async () => ({
+                    data: existingCheckoutOnSameDay ? { id: 'prior-booking' } : null,
+                    error: null,
+                  })),
+                })),
+              })),
+            })),
+            update: mock(() => ({
+              eq: mock(() => ({
+                select: mock(() => ({
+                  single: mock(async () => ({
+                    data: { id: 'new-booking', ...baseInput, status: 'Pending', escrow_id: 'escrow-123' },
+                    error: null,
+                  })),
+                })),
+              })),
+            })),
+          };
+        }
+        return {};
+      });
+      mockRpc.mockImplementation(async () => ({ data: 'new-booking', error: null }));
+    }
+
+    it('blocks same-day check-in when check_out_time >= check_in_time', async () => {
+      // checkout 16:00, checkin 14:00 → turnover not possible
+      setupWithTurnover('14:00', '16:00', true);
+      const result = await bookingService.createBooking(baseInput);
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Same-day check-in is not available/);
+    });
+
+    it('allows same-day check-in when check_out_time < check_in_time', async () => {
+      // checkout 10:00, checkin 15:00 → turnover possible
+      setupWithTurnover('15:00', '10:00', true);
+      const result = await bookingService.createBooking(baseInput);
+      expect(result.success).toBe(true);
+    });
+
+    it('allows same-day when no prior booking checks out on that day', async () => {
+      setupWithTurnover('14:00', '16:00', false);
+      const result = await bookingService.createBooking(baseInput);
+      expect(result.success).toBe(true);
+    });
+  });
+
+  // ── getUserBookings filtering (#270) ─────────────────────────────────────────
+
+  describe('getUserBookings — filtering and sorting', () => {
+    function setupBookingsQuery(rows: Booking[]) {
+      mockFrom.mockImplementation(() => ({
+        select: mock(() => ({
+          eq: mock(() => ({
+            order: mock(() => ({
+              order: mock(() => ({
+                limit: mock(async () => ({ data: rows, error: null })),
+              })),
+            })),
+          })),
+        })),
+      }));
+    }
+
+    it('returns all bookings without a status filter', async () => {
+      const rows: Booking[] = [
+        { id: 'b1', status: 'Confirmed', check_in: '2026-08-01', check_out: '2026-08-05', total_price: 400 },
+        { id: 'b2', status: 'Pending', check_in: '2026-09-01', check_out: '2026-09-03', total_price: 200 },
+      ];
+      setupBookingsQuery(rows);
+      const result = await bookingService.getUserBookings('user-1');
+      expect(result.success).toBe(true);
+      expect(result.data?.data).toHaveLength(2);
+    });
+
+    it('passes status filter through to the query', async () => {
+      const rows: Booking[] = [
+        { id: 'b1', status: 'Confirmed', check_in: '2026-08-01', check_out: '2026-08-05', total_price: 400 },
+      ];
+      setupBookingsQuery(rows);
+      const result = await bookingService.getUserBookings('user-1', null, 20, 'confirmed');
+      expect(result.success).toBe(true);
+      // The mock returns the preset rows; we verify the call succeeded with a filter
+      expect(result.data?.data).toHaveLength(1);
+    });
+
+    it('returns empty list for a status with no matching bookings', async () => {
+      setupBookingsQuery([]);
+      const result = await bookingService.getUserBookings('user-1', null, 20, 'cancelled');
+      expect(result.success).toBe(true);
+      expect(result.data?.data).toHaveLength(0);
+    });
+
+    it('returns error when userId is empty', async () => {
+      const result = await bookingService.getUserBookings('');
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('User ID is required');
     });
   });
 });

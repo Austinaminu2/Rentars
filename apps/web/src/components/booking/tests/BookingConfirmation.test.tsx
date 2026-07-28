@@ -48,10 +48,28 @@ describe('BookingConfirmation', () => {
       checkIn: '2024-12-25',
       checkOut: '2024-12-31',
     };
-    
+
     render(<BookingConfirmation {...props} />);
-    
+
     expect(screen.getByText('12/25/2024')).toBeInTheDocument();
     expect(screen.getByText('12/31/2024')).toBeInTheDocument();
+  });
+
+  it('displays check-in and check-out times when provided', () => {
+    render(
+      <BookingConfirmation
+        {...defaultProps}
+        checkInTime="15:00"
+        checkOutTime="11:00"
+      />,
+    );
+
+    expect(screen.getByText(/at 15:00/)).toBeInTheDocument();
+    expect(screen.getByText(/at 11:00/)).toBeInTheDocument();
+  });
+
+  it('omits time suffix when checkInTime/checkOutTime are not provided', () => {
+    render(<BookingConfirmation {...defaultProps} />);
+    expect(screen.queryByText(/at \d{2}:\d{2}/)).not.toBeInTheDocument();
   });
 });

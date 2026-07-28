@@ -28,7 +28,7 @@ const locationSchema = z.object({
 
 // ─── Create property schema ───────────────────────────────────────────────────
 
-export const propertySchema = z.object({
+const propertyBaseSchema = z.object({
   title: z
     .string()
     .min(3, 'title must be at least 3 characters')
@@ -69,11 +69,52 @@ export const propertySchema = z.object({
   images: z.array(z.string().url('each image must be a valid URL')).optional().default([]),
 
   featured: z.boolean().optional().default(false),
+
+  min_nights: z
+    .number({ invalid_type_error: 'min_nights must be a number' })
+    .int('min_nights must be an integer')
+    .min(1, 'min_nights must be at least 1')
+    .optional()
+    .default(1),
+
+  max_nights: z
+    .number({ invalid_type_error: 'max_nights must be a number' })
+    .int('max_nights must be an integer')
+    .min(1, 'max_nights must be at least 1')
+    .nullable()
+    .optional()
+    .default(null),
+
+  check_in_time: z
+    .string()
+    .regex(/^\d{2}:\d{2}$/, 'check_in_time must be in HH:MM format')
+    .optional()
+    .default('15:00'),
+
+  check_out_time: z
+    .string()
+    .regex(/^\d{2}:\d{2}$/, 'check_out_time must be in HH:MM format')
+    .optional()
+    .default('11:00'),
+});
+
+function refineMinMax<T extends { min_nights?: number | null; max_nights?: number | null }>(data: T) {
+  const min = data.min_nights ?? 1;
+  const max = data.max_nights;
+  return max === null || max === undefined || max >= min;
+}
+
+export const propertySchema = propertyBaseSchema.refine(refineMinMax, {
+  message: 'max_nights must be greater than or equal to min_nights',
+  path: ['max_nights'],
 });
 
 // ─── Update property schema (all fields optional) ─────────────────────────────
 
-export const updatePropertySchema = propertySchema.partial();
+export const updatePropertySchema = propertyBaseSchema.partial().refine(refineMinMax, {
+  message: 'max_nights must be greater than or equal to min_nights',
+  path: ['max_nights'],
+});
 
 // ─── Search / filter query schema ─────────────────────────────────────────────
 

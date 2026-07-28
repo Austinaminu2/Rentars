@@ -15,6 +15,8 @@ export type BookingEmailData = {
   checkIn: string;
   checkOut: string;
   totalPrice: number;
+  checkInTime?: string;
+  checkOutTime?: string;
   /** Signed per-recipient URL for preference management (optional). */
   preferencesUrl?: string;
 };
@@ -75,13 +77,13 @@ function bookingDetailsHtml(data: BookingEmailData): string {
             <tr>
               <td style="font-size:14px;color:#6B7280;padding-bottom:8px;">Check-in</td>
               <td style="font-size:14px;font-weight:600;color:#111827;padding-bottom:8px;text-align:right;">
-                ${escapeHtml(data.checkIn)}
+                ${escapeHtml(data.checkIn)}${data.checkInTime ? ` at ${escapeHtml(data.checkInTime)}` : ''}
               </td>
             </tr>
             <tr>
               <td style="font-size:14px;color:#6B7280;padding-bottom:8px;">Check-out</td>
               <td style="font-size:14px;font-weight:600;color:#111827;padding-bottom:8px;text-align:right;">
-                ${escapeHtml(data.checkOut)}
+                ${escapeHtml(data.checkOut)}${data.checkOutTime ? ` at ${escapeHtml(data.checkOutTime)}` : ''}
               </td>
             </tr>
             <tr>

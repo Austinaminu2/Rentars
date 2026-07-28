@@ -21,7 +21,15 @@ export async function listUserBookings(req: AuthRequest, res: Response): Promise
     return;
   }
 
-  const result = await bookingService.getUserBookings(userId, cursor, limit);
+  const status = typeof req.query.status === 'string' ? req.query.status : null;
+
+  const sortRaw = typeof req.query.sort === 'string' ? req.query.sort : 'created';
+  const sort = ['date', 'price', 'created'].includes(sortRaw) ? (sortRaw as 'date' | 'price' | 'created') : 'created';
+
+  const orderRaw = typeof req.query.order === 'string' ? req.query.order : 'desc';
+  const order = orderRaw === 'asc' ? 'asc' : 'desc';
+
+  const result = await bookingService.getUserBookings(userId, cursor, limit, status, sort, order);
   if (!result.success) {
     res.status(400).json({ error: result.error });
     return;

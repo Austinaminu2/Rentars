@@ -129,20 +129,23 @@ export class BookingService {
   }
 
   /**
-   * List bookings for a user (as tenant) using cursor-based pagination.
-   *
-   * Sort key: (created_at DESC, id DESC) — stable under concurrent inserts.
-   * When cursor is omitted the first page is returned. Pass the returned
-   * nextCursor as the cursor param to fetch the next page.
+   * List bookings for a user (as tenant) with optional status filtering and
+   * sorting, backed by cursor-based pagination.
    *
    * @param userId  - UUID of the tenant
    * @param cursor  - Opaque pagination cursor (omit for first page)
    * @param limit   - Page size (1–100, default 20)
+   * @param status  - Filter by booking status
+   * @param sort    - Sort field: 'date' (check_in) | 'price' (total_price) | 'created' (default)
+   * @param order   - Sort direction: 'asc' | 'desc' (default 'desc')
    */
   async getUserBookings(
     userId: string,
     cursor?: string | null,
     limit = 20,
+    status?: string | null,
+    sort: 'date' | 'price' | 'created' = 'created',
+    order: 'asc' | 'desc' = 'desc',
   ): Promise<ServiceResponse<CursorPaginatedResult<Booking>>> {
     if (!userId) {
       return { success: false, error: 'User ID is required' };
@@ -151,15 +154,24 @@ export class BookingService {
     const pageSize = Math.min(Math.max(1, limit), 100);
     const decoded = decodeCursor(cursor);
 
+    const sortColumn = sort === 'date' ? 'check_in' : sort === 'price' ? 'total_price' : 'created_at';
+    const ascending = order === 'asc';
+
     let query = supabase
       .from('bookings')
       .select('*')
       .eq('tenant_id', userId)
-      .order('created_at', { ascending: false })
+      .order(sortColumn, { ascending })
       .order('id', { ascending: false })
       .limit(pageSize + 1);
 
-    if (decoded) {
+    if (status) {
+      // Normalise to title-case to match DB values (Pending, Confirmed, etc.)
+      const normalised = status.charAt(0).toUpperCase() + status.slice(1).toLowerCase();
+      query = query.eq('status', normalised);
+    }
+
+    if (decoded && sort === 'created') {
       query = query.or(
         `created_at.lt.${decoded.created_at},and(created_at.eq.${decoded.created_at},id.lt.${decoded.id})`,
       );
@@ -229,10 +241,10 @@ export class BookingService {
       return { success: false, error: 'check_in must be before check_out' };
     }
 
-    // 1. Fetch property + owner (include max_guests for capacity check)
+    // 1. Fetch property + owner (include capacity and stay-length limits)
     const { data: property, error: propertyError } = await supabase
       .from('properties')
-      .select('id, owner_id, on_chain_id, max_guests')
+      .select('id, owner_id, on_chain_id, max_guests, min_nights, max_nights, check_in_time, check_out_time')
       .eq('id', property_id)
       .single();
 
@@ -245,6 +257,10 @@ export class BookingService {
       owner_id: string;
       on_chain_id?: number;
       max_guests?: number;
+      min_nights?: number;
+      max_nights?: number | null;
+      check_in_time?: string;
+      check_out_time?: string;
     };
 
     // Capacity check
@@ -253,6 +269,41 @@ export class BookingService {
         success: false,
         error: `Guest count (${guest_count}) exceeds property capacity (${prop.max_guests})`,
       };
+    }
+
+    // Stay-length check
+    const nights = Math.round((checkOutDate.getTime() - checkInDate.getTime()) / (1000 * 60 * 60 * 24));
+    const minNights = prop.min_nights ?? 1;
+    if (nights < minNights) {
+      return {
+        success: false,
+        error: `This property requires a minimum stay of ${minNights} night${minNights === 1 ? '' : 's'} (requested: ${nights})`,
+      };
+    }
+    if (prop.max_nights !== null && prop.max_nights !== undefined && nights > prop.max_nights) {
+      return {
+        success: false,
+        error: `This property allows a maximum stay of ${prop.max_nights} night${prop.max_nights === 1 ? '' : 's'} (requested: ${nights})`,
+      };
+    }
+
+    // Same-day turnover check: if an existing booking checks out on our check-in day,
+    // only allow it when the property's check_out_time precedes its check_in_time.
+    if (prop.check_in_time && prop.check_out_time) {
+      const { data: sameDayBooking } = await supabase
+        .from('bookings')
+        .select('id')
+        .eq('property_id', property_id)
+        .eq('check_out', check_in)
+        .neq('status', 'Cancelled')
+        .maybeSingle();
+
+      if (sameDayBooking && prop.check_out_time >= prop.check_in_time) {
+        return {
+          success: false,
+          error: `Same-day check-in is not available: the property's check-out time (${prop.check_out_time}) does not precede its check-in time (${prop.check_in_time})`,
+        };
+      }
     }
 
     // 2. Fetch Stellar addresses
