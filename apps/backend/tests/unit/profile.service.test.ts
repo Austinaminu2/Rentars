@@ -17,6 +17,7 @@ import {
   updateProfile,
   updateStellarAddress,
   getPublicProfile,
+  computeProfileCompleteness,
 } from '../../src/services/profile.service.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -199,6 +200,35 @@ describe('profile.service', () => {
       const result = await getPublicProfile('nonexistent');
       expect(result.success).toBe(false);
       expect(result.error).toBe('Profile not found');
+    });
+  });
+
+  // ── computeProfileCompleteness ───────────────────────────────────────────────
+
+  describe('computeProfileCompleteness', () => {
+    it('returns max score for a complete profile', () => {
+      const result = computeProfileCompleteness({
+        name: 'Alice',
+        avatar_url: 'https://example.com/avatar.jpg',
+        phone: '+1234567890',
+        address: '123 Main St',
+        stellar_address: 'GBRPYHIL2CI3WHZDTOOQFC6EB4CGQOFSNHERX3LRJCX5FWCL46664F3',
+      });
+      expect(result.score).toBe(result.maxScore);
+      expect(result.missingFields).toHaveLength(0);
+    });
+
+    it('returns zero score for an empty profile', () => {
+      const result = computeProfileCompleteness({});
+      expect(result.score).toBe(0);
+      expect(result.missingFields).toHaveLength(5);
+    });
+
+    it('counts only non-empty fields', () => {
+      const result = computeProfileCompleteness({ name: 'Alice' });
+      expect(result.score).toBeGreaterThan(0);
+      expect(result.score).toBeLessThan(result.maxScore);
+      expect(result.missingFields).not.toContain('name');
     });
   });
 });

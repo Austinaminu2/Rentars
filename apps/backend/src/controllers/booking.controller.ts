@@ -48,6 +48,17 @@ export async function getBooking(req: Request, res: Response): Promise<void> {
   res.json(result.data);
 }
 
+export async function getBookingStatusHistory(req: Request, res: Response): Promise<void> {
+  const result = await bookingService.getBookingStatusHistory(req.params.id);
+
+  if (!result.success) {
+    res.status(404).json({ error: result.error });
+    return;
+  }
+
+  res.json(result.data);
+}
+
 export async function createBooking(req: Request, res: Response): Promise<void> {
   const result = await bookingService.createBooking(req.body);
 
@@ -78,6 +89,62 @@ export async function confirmBooking(req: Request, res: Response): Promise<void>
 
   if (!result.success) {
     res.status(400).json({ error: result.error });
+    return;
+  }
+
+  res.json(result.data);
+}
+
+/**
+ * POST /api/v1/bookings/:id/complete
+ *
+ * Marks a Confirmed booking as Completed.
+ * Only the booking tenant may call this endpoint.
+ */
+export async function completeBooking(req: Request, res: Response): Promise<void> {
+  const authUser = (req as Request & { user?: { id: string } }).user;
+  if (!authUser) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  const result = await bookingService.completeBooking(req.params.id, authUser.id);
+
+  if (!result.success) {
+    const statusCode =
+      result.error?.startsWith('Forbidden') ? 403
+      : result.error === 'Booking not found'  ? 404
+      : 400;
+    res.status(statusCode).json({ error: result.error });
+    return;
+  }
+
+  res.json(result.data);
+}
+
+/**
+ * POST /api/v1/bookings/:id/dispute
+ *
+ * Opens a dispute on a Confirmed booking.
+ * Only the booking tenant may call this endpoint.
+ * Optional body: { reason: string }
+ */
+export async function disputeBooking(req: Request, res: Response): Promise<void> {
+  const authUser = (req as Request & { user?: { id: string } }).user;
+  if (!authUser) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : undefined;
+  const result = await bookingService.disputeBooking(req.params.id, authUser.id, reason);
+
+  if (!result.success) {
+    const statusCode =
+      result.error?.startsWith('Forbidden') ? 403
+      : result.error === 'Booking not found'  ? 404
+      : 400;
+    res.status(statusCode).json({ error: result.error });
     return;
   }
 
@@ -236,4 +303,72 @@ export async function getBookingReceipt(req: Request, res: Response): Promise<vo
   res.setHeader('Content-Disposition', `attachment; filename="receipt-${booking.id}.pdf"`);
   res.setHeader('Content-Length', pdfBuffer.length);
   res.send(pdfBuffer);
+}
+
+/**
+ * POST /api/v1/bookings/:id/dispute
+ *
+ * Raise a dispute on a booking. Only the tenant or host may raise a dispute.
+ */
+export async function raiseDispute(req: Request, res: Response): Promise<void> {
+  const userId = (req as Request & { user?: { id: string } }).user?.id;
+
+  if (!userId) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  const { reason, details } = req.body as { reason: string; details?: string };
+
+  const result = await bookingService.raiseDispute(req.params.id, userId, reason, details);
+
+  if (!result.success) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+
+  res.json(result.data);
+}
+
+/**
+ * POST /api/v1/bookings/:id/dispute/resolve
+ *
+ * Resolve a dispute on a booking. Only admins/moderators may resolve disputes.
+ */
+export async function resolveDispute(req: Request, res: Response): Promise<void> {
+  const userId = (req as Request & { user?: { id: string } }).user?.id;
+
+  if (!userId) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  // TODO: Check if user is admin/moderator
+  // For now, we'll return 403 for all users until admin role check is implemented
+  // In a real implementation, you would check user role here
+  const isAdmin = false; // Placeholder - replace with actual admin check
+
+  if (!isAdmin) {
+    res.status(403).json({ error: 'Forbidden: only admins may resolve disputes' });
+    return;
+  }
+
+  const { resolution, admin_notes } = req.body as { 
+    resolution: 'refund_tenant' | 'release_to_host'; 
+    admin_notes?: string;
+  };
+
+  const result = await bookingService.resolveDispute(
+    req.params.id, 
+    userId, 
+    resolution, 
+    admin_notes
+  );
+
+  if (!result.success) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+
+  res.json(result.data);
 }

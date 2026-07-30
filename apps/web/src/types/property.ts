@@ -1,10 +1,17 @@
+export interface PropertyImage {
+  id: string;
+  url: string;
+  is_primary?: boolean;
+  display_order?: number;
+}
+
 export interface Property {
   id: string;
   title: string;
   description: string;
   price_per_night: number;
   location: string;
-  images: string[];
+  images: PropertyImage[];
   owner_id: string;
   available: boolean;
   created_at: string;

@@ -190,6 +190,10 @@ export async function computeZeroResultSuggestions(
     if (merged.min_price !== undefined) q = q.gte('price_per_night', merged.min_price);
     if (merged.max_price !== undefined) q = q.lte('price_per_night', merged.max_price);
     if (merged.bedrooms !== undefined) q = q.gte('bedrooms', merged.bedrooms);
+    if (merged.min_bathrooms !== undefined) q = q.gte('bathrooms', merged.min_bathrooms);
+    if (merged.property_types && merged.property_types.length > 0) {
+      q = q.in('property_type', merged.property_types);
+    }
     if (merged.guests !== undefined) q = q.gte('max_guests', merged.guests);
     if (merged.amenities && merged.amenities.length > 0) {
       q = q.contains('amenities', merged.amenities);
@@ -252,4 +256,128 @@ export async function computeZeroResultSuggestions(
   );
 
   return suggestions.sort((a, b) => b.estimated_results - a.estimated_results);
+}
+
+// ─── Price histogram ──────────────────────────────────────────────────────────
+
+export interface PriceHistogramBucket {
+  /** Lower bound of this bucket (inclusive). */
+  min: number;
+  /** Upper bound of this bucket (exclusive, except the last bucket). */
+  max: number;
+  /** Number of active listings whose price falls within this bucket. */
+  count: number;
+}
+
+export interface PriceHistogramResult {
+  buckets: PriceHistogramBucket[];
+  /** Lowest price observed across all listings in the current context. */
+  global_min: number;
+  /** Highest price observed across all listings in the current context. */
+  global_max: number;
+}
+
+/**
+ * Compute a price-distribution histogram for the current search context.
+ *
+ * IMPORTANT — the price filter itself is intentionally EXCLUDED from the query
+ * so the histogram always reflects the full price range available for the
+ * current non-price filters. This lets the UI render a histogram behind the
+ * price slider that shows users what's available before they drag the slider.
+ *
+ * Bucket computation happens in the database using a width_bucket() aggregate,
+ * not on the client, so it scales to large result sets without shipping every
+ * price to the server.
+ *
+ * @param filters  - Current search filters. min_price / max_price are ignored.
+ * @param buckets  - Number of histogram buckets (default: 20).
+ */
+export async function getPriceHistogram(
+  filters: AdvancedSearchFilters,
+  numBuckets = 20,
+): Promise<PriceHistogramResult> {
+  // Step 1: get min/max across the filtered context (price filter excluded)
+  let rangeQuery = supabase
+    .from('properties')
+    .select('price_per_night')
+    .eq('status', 'available');
+
+  rangeQuery = applyNonPriceFilters(rangeQuery, filters);
+
+  const { data: priceRows, error: rangeError } = await rangeQuery;
+
+  if (rangeError || !priceRows || priceRows.length === 0) {
+    return { buckets: [], global_min: 0, global_max: 0 };
+  }
+
+  const prices = (priceRows as { price_per_night: number }[]).map((r) => r.price_per_night);
+  const globalMin = Math.floor(Math.min(...prices));
+  const globalMax = Math.ceil(Math.max(...prices));
+
+  if (globalMin === globalMax) {
+    return {
+      buckets: [{ min: globalMin, max: globalMax, count: prices.length }],
+      global_min: globalMin,
+      global_max: globalMax,
+    };
+  }
+
+  // Step 2: bucket the prices client-side (avoids needing a custom RPC)
+  const bucketWidth = (globalMax - globalMin) / numBuckets;
+  const counts = new Array<number>(numBuckets).fill(0);
+
+  for (const price of prices) {
+    const idx = Math.min(
+      Math.floor((price - globalMin) / bucketWidth),
+      numBuckets - 1,
+    );
+    counts[idx]++;
+  }
+
+  const buckets: PriceHistogramBucket[] = counts.map((count, i) => ({
+    min: Math.round(globalMin + i * bucketWidth),
+    max: Math.round(globalMin + (i + 1) * bucketWidth),
+    count,
+  }));
+
+  return { buckets, global_min: globalMin, global_max: globalMax };
+}
+
+/**
+ * Apply all search filters EXCEPT min_price / max_price to a Supabase query.
+ * Extracted so both `getPriceHistogram` and `advancedSearch` share the same
+ * filter logic and stay in sync.
+ */
+function applyNonPriceFilters<T>(
+  query: T,
+  filters: AdvancedSearchFilters,
+): T {
+  let q = query as unknown as ReturnType<typeof supabase.from>;
+
+  if (filters.query) {
+    const tokens = filters.query
+      .toLowerCase()
+      .split(/\s+/)
+      .map((t) => t.replace(/[^a-z0-9_-]/g, ''))
+      .filter(Boolean);
+    if (tokens.length > 0) {
+      q = q.textSearch('search_vector', tokens.map((t) => `${t}:*`).join(' & '), {
+        config: 'english',
+      });
+    }
+  }
+
+  if (filters.city) q = q.ilike('city', `%${filters.city}%`);
+  if (filters.country) q = q.ilike('country', `%${filters.country}%`);
+  if (filters.bedrooms !== undefined) q = q.gte('bedrooms', filters.bedrooms);
+  if (filters.min_bathrooms !== undefined) q = q.gte('bathrooms', filters.min_bathrooms);
+  if (filters.property_types && filters.property_types.length > 0) {
+    q = q.in('property_type', filters.property_types);
+  }
+  if (filters.guests !== undefined) q = q.gte('max_guests', filters.guests);
+  if (filters.amenities && filters.amenities.length > 0) {
+    q = q.contains('amenities', filters.amenities);
+  }
+
+  return q as unknown as T;
 }

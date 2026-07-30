@@ -6,6 +6,7 @@ import { useTranslations } from '@/lib/i18n/useTranslations';
 import { useLocale } from '@/lib/i18n/useLocale';
 import { formatCurrency } from '@/lib/i18n/formatting';
 import { getErrorMessage, isApiError } from '@/lib/errors/errorCodes';
+import { useCurrency } from '@/hooks/useCurrency';
 
 interface BookingFormProps {
   propertyId: string;
@@ -51,6 +52,7 @@ export default function BookingForm({
 
   const t = useTranslations('booking');
   const { locale } = useLocale();
+  const { formatEstimate, displayCurrency, ratesStale } = useCurrency();
   const today = new Date().toISOString().split('T')[0];
 
   useEffect(() => {
@@ -265,45 +267,113 @@ export default function BookingForm({
 
       {pricing && (
         <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg space-y-2">
+          {/* Estimate disclaimer */}
+          {displayCurrency !== 'USD' && (
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+              Charges are always in{' '}
+              <span className="font-semibold text-blue-600 dark:text-blue-400">USDC</span>.
+              {' '}Local-currency figures are{' '}
+              <span className="italic">estimates only</span>
+              {ratesStale && (
+                <span className="ml-1 text-amber-500 dark:text-amber-400">
+                  (rates may be outdated)
+                </span>
+              )}
+              .
+            </p>
+          )}
+
           {pricing.breakdown.length > 0 && (
             <div className="max-h-24 overflow-y-auto text-xs space-y-1 mb-3 pb-2 border-b border-gray-200 dark:border-gray-700">
               {pricing.breakdown.map((day) => (
                 <div key={day.date} className="flex justify-between text-gray-600 dark:text-gray-400">
                   <span>{day.date}</span>
                   <span>
-                    {day.is_available
-                      ? `${formatCurrency(day.price, locale)} USDC`
-                      : day.reason ?? 'Unavailable'}
+                    {day.is_available ? (
+                      <>
+                        {formatCurrency(day.price, locale)} USDC
+                        {displayCurrency !== 'USD' && formatEstimate(day.price) && (
+                          <span className="ml-1 text-gray-400 dark:text-gray-500">
+                            {formatEstimate(day.price)}
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      day.reason ?? 'Unavailable'
+                    )}
                   </span>
                 </div>
               ))}
             </div>
           )}
-          <div className="space-y-1 text-sm text-gray-600">
+
+          <div className="space-y-1 text-sm text-gray-600 dark:text-gray-400">
+            {/* Base rate line */}
             <div className="flex justify-between">
               <span>
                 {formatCurrency(pricing.base_nightly_rate, locale)} &times; {pricing.nights}{' '}
                 {pricing.nights === 1 ? 'night' : 'nights'}
               </span>
-              <span>{formatCurrency(pricing.subtotal, locale)} USDC</span>
+              <span className="text-right">
+                <span className="font-medium text-gray-800 dark:text-gray-200">
+                  {formatCurrency(pricing.subtotal, locale)} USDC
+                </span>
+                {displayCurrency !== 'USD' && formatEstimate(pricing.subtotal) && (
+                  <span className="block text-xs text-gray-400 dark:text-gray-500 italic">
+                    {formatEstimate(pricing.subtotal)} (estimate)
+                  </span>
+                )}
+              </span>
             </div>
+
+            {/* Dynamic adjustments */}
             {pricing.dynamic_adjustments !== 0 && (
               <div className="flex justify-between">
                 <span>Dynamic pricing</span>
-                <span>
-                  {pricing.dynamic_adjustments > 0 ? '+' : ''}
-                  {formatCurrency(pricing.dynamic_adjustments, locale)} USDC
+                <span className="text-right">
+                  <span className="font-medium text-gray-800 dark:text-gray-200">
+                    {pricing.dynamic_adjustments > 0 ? '+' : ''}
+                    {formatCurrency(pricing.dynamic_adjustments, locale)} USDC
+                  </span>
+                  {displayCurrency !== 'USD' && formatEstimate(Math.abs(pricing.dynamic_adjustments)) && (
+                    <span className="block text-xs text-gray-400 dark:text-gray-500 italic">
+                      {pricing.dynamic_adjustments > 0 ? '+' : '-'}
+                      {formatEstimate(Math.abs(pricing.dynamic_adjustments))} (estimate)
+                    </span>
+                  )}
                 </span>
               </div>
             )}
+
+            {/* Platform fee */}
             <div className="flex justify-between">
               <span>Platform fee ({(pricing.platform_fee_pct * 100).toFixed(0)}%)</span>
-              <span>{formatCurrency(pricing.platform_fee, locale)} USDC</span>
+              <span className="text-right">
+                <span className="font-medium text-gray-800 dark:text-gray-200">
+                  {formatCurrency(pricing.platform_fee, locale)} USDC
+                </span>
+                {displayCurrency !== 'USD' && formatEstimate(pricing.platform_fee) && (
+                  <span className="block text-xs text-gray-400 dark:text-gray-500 italic">
+                    {formatEstimate(pricing.platform_fee)} (estimate)
+                  </span>
+                )}
+              </span>
             </div>
           </div>
-          <div className="border-t pt-2 flex justify-between font-semibold">
-            <span>Total</span>
-            <span className="text-blue-600">{formatCurrency(pricing.total, locale)} USDC</span>
+
+          {/* Total */}
+          <div className="border-t pt-2 flex justify-between items-start font-semibold">
+            <span>Total (charged in USDC)</span>
+            <span className="text-right">
+              <span className="text-blue-600 dark:text-blue-400">
+                {formatCurrency(pricing.total, locale)} USDC
+              </span>
+              {displayCurrency !== 'USD' && formatEstimate(pricing.total) && (
+                <span className="block text-xs font-normal text-gray-500 dark:text-gray-400 italic">
+                  {formatEstimate(pricing.total)} (estimate)
+                </span>
+              )}
+            </span>
           </div>
         </div>
       )}

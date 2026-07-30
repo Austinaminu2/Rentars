@@ -12,6 +12,10 @@ const TYPE_LABELS: Record<string, string> = {
   payment_received: 'Payment Received',
   booking_reminder: 'Booking Reminder',
   review_requested: 'Review Requested',
+  review_submitted: 'New Review',
+  host_response: 'Host Response',
+  dispute_initiated: 'Dispute Initiated',
+  new_property: 'New Listing',
   system_alert: 'System Alert',
 };
 

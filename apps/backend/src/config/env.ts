@@ -41,7 +41,18 @@ const envSchema = z.object({
     .min(32, 'JWT_SECRET must be at least 32 characters for security'),
 
   // ── CORS ───────────────────────────────────────────────────────────────────
-  CORS_ORIGIN: z.string().default('http://localhost:3001'),
+  // Comma-separated list of allowed origins for credentialed requests.
+  // Wildcards ('*') are rejected at startup — credentialed CORS requires
+  // explicit origins.  Example: "https://app.rentars.com,https://www.rentars.com"
+  CORS_ORIGIN: z
+    .string()
+    .default('http://localhost:3001')
+    .transform((v) => v.split(',').map((o) => o.trim()).filter(Boolean))
+    .refine(
+      (origins) =>
+        origins.length > 0 && origins.every((o) => o !== '*'),
+      'CORS_ORIGIN must not be a wildcard — list explicit origins for credentialed requests',
+    ),
 
   // ── Redis (optional) ───────────────────────────────────────────────────────
   REDIS_URL: z.string().url().optional(),
@@ -65,6 +76,29 @@ const envSchema = z.object({
   // hCaptcha bot protection (set HCAPTCHA_ENABLED=false to bypass in dev)
   HCAPTCHA_SECRET_KEY: z.string().optional(),
   HCAPTCHA_ENABLED: z.string().optional(),
+
+  // ── Body size limits ───────────────────────────────────────────────────────
+  // Maximum size for JSON request bodies (Express body-parser format: "1mb", "512kb", etc.)
+  // Upload routes (multipart/form-data) are governed by multer limits, not this value.
+  JSON_BODY_LIMIT: z.string().default('1mb'),
+
+  // ── Observability ─────────────────────────────────────────────────────────
+  // Minimum log level: debug | info | warn | error  (default: info)
+  LOG_LEVEL: z
+    .enum(['debug', 'info', 'warn', 'error'])
+    .default('info'),
+
+  // Bearer token required to scrape /metrics.
+  // When unset the endpoint is restricted to localhost only.
+  METRICS_TOKEN: z.string().optional(),
+
+  // ── Security headers ──────────────────────────────────────────────────────
+  // Set to "true" to force-enable HSTS even outside NODE_ENV=production.
+  // Useful when running behind a TLS-terminating proxy in staging.
+  HSTS_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true'),
 });
 
 // ── Type export ───────────────────────────────────────────────────────────────

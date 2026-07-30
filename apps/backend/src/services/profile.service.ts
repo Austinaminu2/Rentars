@@ -14,6 +14,20 @@ export interface UserProfile {
   last_active?: string;
 }
 
+export interface ProfileCompleteness {
+  score: number;
+  maxScore: number;
+  missingFields: string[];
+}
+
+const COMPLETENESS_WEIGHTS: Record<string, number> = {
+  name: 25,
+  avatar_url: 25,
+  phone: 20,
+  address: 15,
+  stellar_address: 15,
+};
+
 /**
  * Retrieve a user's full profile by their user ID.
  *
@@ -111,4 +125,21 @@ export async function getPublicProfile(
 
   if (error) return { success: false, error: 'Profile not found' };
   return { success: true, data: data as Partial<UserProfile> };
+}
+
+export function computeProfileCompleteness(profile: Partial<UserProfile>): ProfileCompleteness {
+  let score = 0;
+  const missingFields: string[] = [];
+
+  for (const [field, weight] of Object.entries(COMPLETENESS_WEIGHTS)) {
+    const value = profile[field as keyof Partial<UserProfile>];
+    const hasValue = typeof value === 'string' ? value.trim().length > 0 : Boolean(value);
+    if (hasValue) {
+      score += weight;
+    } else {
+      missingFields.push(field);
+    }
+  }
+
+  return { score, maxScore: Object.values(COMPLETENESS_WEIGHTS).reduce((a, b) => a + b, 0), missingFields };
 }

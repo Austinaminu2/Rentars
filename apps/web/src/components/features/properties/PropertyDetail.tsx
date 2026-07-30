@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
+import Image from 'next/image';
 import { Heart, Share2, CheckCircle, XCircle, Clock } from 'lucide-react';
 import PropertyImageGallery from './PropertyImageGallery';
 import PropertyMap from './PropertyMap';
@@ -10,6 +12,7 @@ import FollowButton from './FollowButton';
 import { useTranslations } from '@/lib/i18n/useTranslations';
 import { useLocale } from '@/lib/i18n/useLocale';
 import { formatCurrency } from '@/lib/i18n/formatting';
+import { useRecentlyViewed } from '@/hooks/useRecentlyViewed';
 import type { Property } from '@/types/property';
 
 interface PropertyDetailProps {
@@ -41,6 +44,11 @@ export default function PropertyDetail({ property }: PropertyDetailProps) {
 
   const t = useTranslations('property');
   const { locale } = useLocale();
+  const { recordView } = useRecentlyViewed();
+
+  useEffect(() => {
+    recordView(property.id);
+  }, [property.id, recordView]);
 
   const amenities = property.amenities || [
     'WiFi',
@@ -51,9 +59,17 @@ export default function PropertyDetail({ property }: PropertyDetailProps) {
     'Washer',
   ];
 
+  const canUseNativeShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+
   const handleShare = (platform: string) => {
     const url = typeof window !== 'undefined' ? window.location.href : '';
     const text = `Check out this property: ${property.title}`;
+
+    if (platform === 'native') {
+      navigator.share({ title: property.title, text, url }).catch(() => {});
+      setShowShareMenu(false);
+      return;
+    }
 
     const shareUrls: Record<string, string> = {
       twitter: `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`,
@@ -97,25 +113,34 @@ export default function PropertyDetail({ property }: PropertyDetailProps) {
             <button
               onClick={() => setShowShareMenu(!showShareMenu)}
               className="p-2 rounded-full border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800"
-              aria-label="Share"
+              aria-label="Share property"
+              aria-expanded={showShareMenu}
+              aria-haspopup="menu"
             >
-              <Share2 size={24} className="text-gray-600 dark:text-gray-400" />
+              <Share2 size={24} className="text-gray-600 dark:text-gray-400" aria-hidden="true" />
             </button>
             {showShareMenu && (
-              <div className="absolute right-0 mt-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-10">
+              <div
+                role="menu"
+                aria-label="Share options"
+                className="absolute right-0 mt-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-10"
+              >
                 <button
+                  role="menuitem"
                   onClick={() => handleShare('twitter')}
                   className="block w-full text-left px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"
                 >
                   {t('shareOnTwitter')}
                 </button>
                 <button
+                  role="menuitem"
                   onClick={() => handleShare('facebook')}
                   className="block w-full text-left px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"
                 >
                   {t('shareOnFacebook')}
                 </button>
                 <button
+                  role="menuitem"
                   onClick={() => handleShare('copy')}
                   className="block w-full text-left px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"
                 >
@@ -241,7 +266,7 @@ export default function PropertyDetail({ property }: PropertyDetailProps) {
           <div>
             <h2 className="text-2xl font-bold mb-4 text-gray-900 dark:text-white">{t('reviews')}</h2>
             <PropertyReviewsSection
-              reviews={property.reviews}
+              reviews={property.reviews as Parameters<typeof PropertyReviewsSection>[0]['reviews']}
               averageRating={property.average_rating}
             />
           </div>
@@ -251,11 +276,15 @@ export default function PropertyDetail({ property }: PropertyDetailProps) {
             <h2 className="text-2xl font-bold mb-4 text-gray-900 dark:text-white">{t('meetHost')}</h2>
             <div className="flex items-center gap-4">
               {property.host_image && (
-                <img
-                  src={property.host_image}
-                  alt={property.host_name}
-                  className="w-16 h-16 rounded-full object-cover"
-                />
+                <div className="relative w-16 h-16 flex-shrink-0">
+                  <Image
+                    src={property.host_image}
+                    alt={property.host_name ?? 'Host'}
+                    fill
+                    sizes="64px"
+                    className="rounded-full object-cover"
+                  />
+                </div>
               )}
               <div className="flex-1">
                 <p className="font-semibold text-lg text-gray-900 dark:text-white">{property.host_name || 'Host'}</p>
@@ -285,9 +314,12 @@ export default function PropertyDetail({ property }: PropertyDetailProps) {
               </div>
             </div>
 
-            <button className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 mb-4">
+            <Link
+              href={`/booking?propertyId=${property.id}`}
+              className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 mb-4 text-center block min-h-[44px] flex items-center justify-center"
+            >
               {t('bookNow')}
-            </button>
+            </Link>
 
             <div className="space-y-3 text-sm">
               <div className="flex justify-between">

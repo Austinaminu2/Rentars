@@ -15,6 +15,9 @@ export interface ReverseGeocodeResult {
 /** Reverse-geocode cache TTL: 1 hour. Coordinates rarely change their place name. */
 const REVERSE_GEOCODE_TTL = 3600;
 
+/** Forward geocode cache TTL: 5 minutes. */
+const GEOCODE_TTL = 300;
+
 export interface PropertyWithDistance {
   id: string;
   title: string;
@@ -109,6 +112,10 @@ export class LocationService {
       return { success: false, error: 'Address is required', statusCode: 400 };
     }
 
+    const cacheKey = `geocode:${address.trim().toLowerCase()}`;
+    const cached = await cache.get<GeocodeResult>(cacheKey);
+    if (cached) return { success: true, data: cached };
+
     try {
       const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`;
       const response = await fetch(url, {
@@ -130,14 +137,14 @@ export class LocationService {
       }
 
       const [hit] = results;
-      return {
-        success: true,
-        data: {
-          latitude: parseFloat(hit.lat),
-          longitude: parseFloat(hit.lon),
-          address: hit.display_name,
-        },
+      const result: GeocodeResult = {
+        latitude: parseFloat(hit.lat),
+        longitude: parseFloat(hit.lon),
+        address: hit.display_name,
       };
+
+      await cache.set(cacheKey, result, GEOCODE_TTL);
+      return { success: true, data: result };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Geocoding failed';
       return { success: false, error: message, statusCode: 500 };

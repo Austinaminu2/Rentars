@@ -11,6 +11,8 @@ import { supabase } from '@/config/supabase.js';
 import { env } from '@/config/env.js';
 import { AuthError, AuthErrorCode } from '@/types/errors.js';
 import { emailService } from './email.service.js';
+import { issueRefreshToken } from './refreshToken.service.js';
+import { securityLogger } from './logging.service.js';
 import type { ServiceResponse } from './index.js';
 
 const VERIFICATION_TOKEN_EXPIRES_MINUTES = 24 * 60; // 24 hours
@@ -34,6 +36,7 @@ export interface RegisterResult {
 
 export interface LoginResult {
   token: string;
+  refreshToken: string;
   user: AuthUser;
 }
 
@@ -124,25 +127,35 @@ export async function loginUser(
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
   if (error) {
+    await securityLogger.logAuthEvent('login_failure', undefined, { email });
     throw new AuthError(AuthErrorCode.INVALID_CREDENTIALS, error.message);
   }
 
   if (!data.user) {
+    await securityLogger.logAuthEvent('login_failure', undefined, { email });
     throw new AuthError(AuthErrorCode.USER_NOT_FOUND, 'Login failed: no user returned');
   }
 
+  // Fetch role from users table (default to 'tenant' if not set)
   const { data: userRow } = await supabase
     .from('users')
     .select('role')
     .eq('id', data.user.id)
     .single();
-  const role = (userRow as { role?: string } | null)?.role || 'tenant';
 
+  const role: string = (userRow as { role?: string } | null)?.role ?? 'tenant';
+
+  // Short-lived access token (15 minutes)
   const token = jwt.sign(
     { userId: data.user.id, role },
     env.JWT_SECRET,
-    { expiresIn: '7d' },
+    { expiresIn: '15m' },
   );
+
+  // Long-lived refresh token stored in Redis (7 days)
+  const refreshToken = await issueRefreshToken({ userId: data.user.id, role });
+
+  await securityLogger.logAuthEvent('login_success', data.user.id, { email });
 
   const user: AuthUser = {
     id: data.user.id,
@@ -151,7 +164,7 @@ export async function loginUser(
     role,
   };
 
-  return { success: true, data: { token, user } };
+  return { success: true, data: { token, refreshToken, user } };
 }
 
 /**

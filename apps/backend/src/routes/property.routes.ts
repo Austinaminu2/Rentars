@@ -8,6 +8,7 @@ import {
   getPropertyBySlugHandler,
   updatePropertyHandler,
   advancedSearchHandler,
+  boundsSearchHandler,
   searchSuggestionsHandler,
   trendingSearchesHandler,
   recordViewHandler,
@@ -44,6 +45,9 @@ router.get('/', getProperties);
 
 // GET /api/v1/properties/search/advanced - Advanced search with filters
 router.get('/search/advanced', advancedSearchHandler);
+
+// GET /api/v1/properties/search/bounds - Map viewport bounding-box search
+router.get('/search/bounds', boundsSearchHandler);
 
 // GET /api/v1/properties/search/nearby - Radius geospatial search ordered by distance
 router.get('/search/nearby', validateQuery(geoSearchSchema), searchNearbyEndpoint);

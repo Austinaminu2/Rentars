@@ -7,6 +7,13 @@ const LABELS: Record<string, string> = {
   booking_confirmed: 'Booking confirmed',
   booking_cancelled: 'Booking cancelled',
   payment_received: 'Payment received',
+  booking_reminder: 'Booking reminder',
+  review_requested: 'Review requested',
+  review_submitted: 'New review submitted',
+  host_response: 'Host responded to your review',
+  dispute_initiated: 'Dispute initiated',
+  new_property: 'New listing from a host you follow',
+  system_alert: 'System alert',
 };
 
 interface NotificationDropdownProps {

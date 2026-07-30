@@ -29,7 +29,7 @@ export default function ReviewForm({ bookingId, targetId, propertyId, onSuccess 
 
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch(`${API_URL}/api/reviews`, {
+      const res = await fetch(`${API_URL}/api/v1/reviews`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ bookingId, targetId, propertyId, rating, comment }),

@@ -20,8 +20,26 @@ import type { Property } from '@/types/property';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
+// Static 1200×630 placeholder used for OG/Twitter previews and JSON-LD image
+// when a property has no photos of its own.
+const FALLBACK_OG_IMAGE = '/og-fallback.svg';
+
 function getSiteUrl() {
   return process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3001';
+}
+
+/** Guarantees an absolute URL so social crawlers (which don't resolve relative paths) can fetch the image. */
+function toAbsoluteUrl(url: string | undefined, siteUrl: string): string | undefined {
+  if (!url) return undefined;
+  if (/^https?:\/\//i.test(url)) return url;
+  return `${siteUrl}${url.startsWith('/') ? '' : '/'}${url}`;
+}
+
+/** Strips markup and truncates on a word boundary so meta descriptions stay within crawler limits. */
+function sanitizeDescription(text: string, maxLength = 140): string {
+  const plain = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  if (plain.length <= maxLength) return plain;
+  return `${plain.slice(0, maxLength).trimEnd()}…`;
 }
 
 // ─── Data fetching ────────────────────────────────────────────────────────────
@@ -34,9 +52,13 @@ type FullProperty = Property & {
   host_image?: string;
   reviews?: Array<{ id: string; author: string; rating: number; comment: string; date: string }>;
   average_rating?: number;
+  review_count?: number;
   blocked_dates?: string[];
   latitude?: number;
   longitude?: number;
+  city?: string;
+  country?: string;
+  address?: string;
   // House rules
   pets_allowed?: boolean;
   smoking_allowed?: boolean;
@@ -91,14 +113,17 @@ export async function generateMetadata({
   const canonicalSlug = property?.slug ?? params.id;
   const canonicalUrl  = `${siteUrl}/property/${canonicalSlug}`;
 
-  const title = property?.title
-    ? `${property.title} — Rentars`
+  const title = property
+    ? `${property.title}${property.location ? ` in ${property.location}` : ''} — Rentars`
     : 'Property — Rentars';
 
-  const description =
+  const rawDescription =
     property?.description_full || property?.description || 'Book your stay on Rentars.';
+  const priceLine =
+    typeof property?.price_per_night === 'number' ? `$${property.price_per_night}/night` : undefined;
+  const description = [sanitizeDescription(rawDescription), priceLine].filter(Boolean).join(' · ');
 
-  const ogImage = property?.images?.[0] ?? undefined;
+  const ogImage = property?.images?.[0]?.url ?? undefined;
 
   return {
     title,
@@ -110,9 +135,15 @@ export async function generateMetadata({
       title,
       description,
       url: canonicalUrl,
-      images: ogImage ? [{ url: ogImage }] : undefined,
+      images: [{ url: ogImage, width: 1200, height: 630, alt: title }],
       locale: 'en_US',
       type: 'website',
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title,
+      description,
+      images: [ogImage],
     },
   };
 }
@@ -143,16 +174,25 @@ export default async function PropertyPage({
   const canonicalUrl = `${siteUrl}/property/${canonicalSlug}`;
 
   // ── JSON-LD structured data ─────────────────────────────────────────────────
+  const images =
+    property.images && property.images.length > 0
+      ? property.images.map((img) => toAbsoluteUrl(img, siteUrl))
+      : [`${siteUrl}${FALLBACK_OG_IMAGE}`];
+
+  const reviewCount = property.review_count ?? property.reviews?.length ?? 0;
+
   const ldJsonLd: Record<string, unknown> = {
     '@context': 'https://schema.org',
     '@type':    'LodgingBusiness',
     name:        property.title,
     description: property.description_full || property.description || 'Accommodation on Rentars',
-    image:       property.images?.[0],
+    image:       property.images?.[0]?.url,
     url:         canonicalUrl,
     address: {
       '@type':          'PostalAddress',
-      addressLocality:  property.location,
+      streetAddress:    property.address,
+      addressLocality:  property.city || property.location,
+      addressCountry:   property.country,
     },
     ...(typeof property.latitude === 'number' && typeof property.longitude === 'number'
       ? {
@@ -160,6 +200,30 @@ export default async function PropertyPage({
             '@type':    'GeoCoordinates',
             latitude:   property.latitude,
             longitude:  property.longitude,
+          },
+        }
+      : {}),
+    ...(typeof property.price_per_night === 'number'
+      ? {
+          priceRange: `$${property.price_per_night}`,
+          offers: {
+            '@type':        'Offer',
+            price:          property.price_per_night,
+            priceCurrency:  'USD',
+            availability:
+              property.available === false
+                ? 'https://schema.org/SoldOut'
+                : 'https://schema.org/InStock',
+            url: canonicalUrl,
+          },
+        }
+      : {}),
+    ...(typeof property.average_rating === 'number' && reviewCount > 0
+      ? {
+          aggregateRating: {
+            '@type':     'AggregateRating',
+            ratingValue: property.average_rating,
+            reviewCount,
           },
         }
       : {}),

@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useRef, useState } from 'react';
+import { useId, useRef, useState, useEffect } from 'react';
 import { Search } from 'lucide-react';
 
 interface SearchBarProps {
@@ -13,6 +13,7 @@ interface SearchBarProps {
 export default function SearchBar({
   onSearch,
   placeholder = 'Search by location...',
+  value: controlledValue,
 }: SearchBarProps) {
   const [location, setLocation] = useState('');
   const [suggestions, setSuggestions] = useState<string[]>([]);

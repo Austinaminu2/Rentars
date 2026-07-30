@@ -56,7 +56,7 @@ describe('ReviewForm', () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining('/api/reviews'),
+        expect.stringContaining('/api/v1/reviews'),
         expect.objectContaining({
           method: 'POST',
           body: expect.stringContaining('"rating":4'),

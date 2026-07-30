@@ -87,6 +87,20 @@ export async function submitReview(
     await cache.del(`property:${propertyId}`);
   }
 
+  // Notify the host that a new review was submitted
+  try {
+    const { createNotification } = await import('./notification.service.js');
+    await createNotification(targetId, 'review_submitted', {
+      reviewId: (data as Review).id,
+      reviewerId,
+      propertyId: propertyId ?? null,
+      rating,
+      message: `A guest left you a ${rating}-star review.`,
+    });
+  } catch {
+    // Notification failure must never block the review submission
+  }
+
   return { success: true, data: data as Review };
 }
 
@@ -183,6 +197,21 @@ export async function addHostResponse(
     .single();
 
   if (error) return { success: false, error: error.message };
+
+  // Notify the reviewer that the host has responded
+  try {
+    const updatedReview = data as Review;
+    const { createNotification } = await import('./notification.service.js');
+    await createNotification(updatedReview.reviewer_id, 'host_response', {
+      reviewId,
+      hostId,
+      propertyId: updatedReview.property_id ?? null,
+      message: 'The host responded to your review.',
+    });
+  } catch {
+    // Notification failure must never block the host response submission
+  }
+
   return { success: true, data: data as Review };
 }
 

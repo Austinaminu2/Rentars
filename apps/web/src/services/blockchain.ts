@@ -5,6 +5,8 @@ export interface BlockchainStatus {
   hash: string | null;
   lastVerified: string | null;
   pending: boolean;
+  failed?: boolean;
+  failureReason?: string | null;
 }
 
 export async function verifyProperty(propertyId: string): Promise<BlockchainStatus> {

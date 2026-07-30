@@ -2,7 +2,9 @@ import type { Request, Response } from 'express';
 import { rateLimitStore } from '@/services/rateLimitStore.service.js';
 import { setFeatured, clearFeatured, FEATURED_CAP } from '@/services/property.service.js';
 import { getTopQueries, getZeroResultQueries, getDailySearchVolume } from '@/services/searchAnalytics.service.js';
-import { listAuditLogs } from '@/services/auditLog.service.js';
+import { auditLogger } from '@/services/auditLogger.service.js';
+import { supabase } from '@/config/supabase.js';
+import type { AdminRequest } from '@/middleware/admin.middleware.js';
 import { z } from 'zod';
 
 // ─── Featured listings ────────────────────────────────────────────────────────
@@ -248,38 +250,341 @@ export async function getRateLimitSummary(req: Request, res: Response): Promise<
   });
 }
 
-// ─── Audit log ────────────────────────────────────────────────────────────────
+// ─── User management ──────────────────────────────────────────────────────────
 
-const auditLogQuerySchema = z.object({
-  actorId: z.string().uuid().optional(),
-  action: z.string().optional(),
-  targetType: z.string().optional(),
-  targetId: z.string().uuid().optional(),
-  limit: z.coerce.number().int().min(1).max(200).default(50),
+/**
+ * GET /api/v1/admin/users
+ * List all users with role, status, join date. Supports pagination.
+ */
+export async function listUsers(req: AdminRequest, res: Response): Promise<void> {
+  const page = Math.max(1, Number(req.query.page ?? 1));
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 20)));
+  const offset = (page - 1) * limit;
+
+  const { data, error, count } = await supabase
+    .from('users')
+    .select('id, email, role, status, created_at, email_verified', { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  if (error) {
+    res.status(500).json({ error: { code: 'DB_ERROR', message: error.message } });
+    return;
+  }
+
+  res.json({ data, meta: { page, limit, total: count ?? 0 } });
+}
+
+/**
+ * GET /api/v1/admin/users/:id
+ * User detail with booking history.
+ */
+export async function getUserDetail(req: AdminRequest, res: Response): Promise<void> {
+  const { id } = req.params;
+
+  const [userResult, bookingsResult] = await Promise.all([
+    supabase
+      .from('users')
+      .select('id, email, role, status, created_at, email_verified')
+      .eq('id', id)
+      .single(),
+    supabase
+      .from('bookings')
+      .select('id, property_id, status, check_in, check_out, total_price, created_at')
+      .eq('user_id', id)
+      .order('created_at', { ascending: false })
+      .limit(20),
+  ]);
+
+  if (userResult.error || !userResult.data) {
+    res.status(404).json({ error: { code: 'USER_NOT_FOUND', message: 'User not found' } });
+    return;
+  }
+
+  res.json({ data: { user: userResult.data, bookings: bookingsResult.data ?? [] } });
+}
+
+/**
+ * POST /api/v1/admin/users/:id/suspend
+ */
+export async function suspendUser(req: AdminRequest, res: Response): Promise<void> {
+  const { id } = req.params;
+
+  const { error } = await supabase
+    .from('users')
+    .update({ status: 'suspended' })
+    .eq('id', id);
+
+  if (error) {
+    res.status(500).json({ error: { code: 'DB_ERROR', message: error.message } });
+    return;
+  }
+
+  await auditLogger.log({
+    actorId: req.adminId,
+    action: 'admin.user_suspend',
+    resourceType: 'user',
+    resourceId: id,
+    ip: req.ip,
+  });
+
+  res.json({ message: 'User suspended.' });
+}
+
+/**
+ * POST /api/v1/admin/users/:id/activate
+ */
+export async function activateUser(req: AdminRequest, res: Response): Promise<void> {
+  const { id } = req.params;
+
+  const { error } = await supabase
+    .from('users')
+    .update({ status: 'active' })
+    .eq('id', id);
+
+  if (error) {
+    res.status(500).json({ error: { code: 'DB_ERROR', message: error.message } });
+    return;
+  }
+
+  await auditLogger.log({
+    actorId: req.adminId,
+    action: 'admin.user_activate',
+    resourceType: 'user',
+    resourceId: id,
+    ip: req.ip,
+  });
+
+  res.json({ message: 'User activated.' });
+}
+
+// ─── Property management ──────────────────────────────────────────────────────
+
+/**
+ * GET /api/v1/admin/properties
+ * List all properties with status filter support.
+ */
+export async function listAdminProperties(req: AdminRequest, res: Response): Promise<void> {
+  const page = Math.max(1, Number(req.query.page ?? 1));
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 20)));
+  const offset = (page - 1) * limit;
+  const statusFilter = req.query.status as string | undefined;
+
+  let query = supabase
+    .from('properties')
+    .select('id, title, status, owner_id, price_per_night, created_at', { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  if (statusFilter) {
+    query = query.eq('status', statusFilter);
+  }
+
+  const { data, error, count } = await query;
+
+  if (error) {
+    res.status(500).json({ error: { code: 'DB_ERROR', message: error.message } });
+    return;
+  }
+
+  res.json({ data, meta: { page, limit, total: count ?? 0 } });
+}
+
+/**
+ * POST /api/v1/admin/properties/:id/suspend
+ */
+export async function suspendProperty(req: AdminRequest, res: Response): Promise<void> {
+  const { id } = req.params;
+
+  const { error } = await supabase
+    .from('properties')
+    .update({ status: 'suspended' })
+    .eq('id', id);
+
+  if (error) {
+    res.status(500).json({ error: { code: 'DB_ERROR', message: error.message } });
+    return;
+  }
+
+  await auditLogger.log({
+    actorId: req.adminId,
+    action: 'admin.property_suspend',
+    resourceType: 'property',
+    resourceId: id,
+    ip: req.ip,
+  });
+
+  res.json({ message: 'Property suspended.' });
+}
+
+/**
+ * POST /api/v1/admin/properties/:id/activate
+ */
+export async function activateProperty(req: AdminRequest, res: Response): Promise<void> {
+  const { id } = req.params;
+
+  const { error } = await supabase
+    .from('properties')
+    .update({ status: 'active' })
+    .eq('id', id);
+
+  if (error) {
+    res.status(500).json({ error: { code: 'DB_ERROR', message: error.message } });
+    return;
+  }
+
+  await auditLogger.log({
+    actorId: req.adminId,
+    action: 'admin.property_activate',
+    resourceType: 'property',
+    resourceId: id,
+    ip: req.ip,
+  });
+
+  res.json({ message: 'Property activated.' });
+}
+
+// ─── Bookings (admin view) ────────────────────────────────────────────────────
+
+/**
+ * GET /api/v1/admin/bookings
+ * List all bookings with status filter support.
+ */
+export async function listAdminBookings(req: AdminRequest, res: Response): Promise<void> {
+  const page = Math.max(1, Number(req.query.page ?? 1));
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 20)));
+  const offset = (page - 1) * limit;
+  const statusFilter = req.query.status as string | undefined;
+
+  let query = supabase
+    .from('bookings')
+    .select('id, property_id, user_id, status, check_in, check_out, total_price, created_at', { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  if (statusFilter) {
+    query = query.eq('status', statusFilter);
+  }
+
+  const { data, error, count } = await query;
+
+  if (error) {
+    res.status(500).json({ error: { code: 'DB_ERROR', message: error.message } });
+    return;
+  }
+
+  res.json({ data, meta: { page, limit, total: count ?? 0 } });
+}
+
+// ─── Dispute management ───────────────────────────────────────────────────────
+
+const resolveDisputeSchema = z.object({
+  resolution_note: z.string().min(1, 'resolution_note is required').max(2000),
+  outcome: z.enum(['refund_tenant', 'release_to_host', 'split']).optional(),
 });
 
 /**
- * GET /api/v1/admin/audit-logs
- *
- * List/filter the append-only audit trail of sensitive admin/moderator actions.
- * No corresponding update/delete endpoint exists — entries are immutable.
- *
- * Query params: actorId, action, targetType, targetId (all optional filters), limit (default 50, max 200)
+ * GET /api/v1/admin/disputes
+ * List open disputes.
  */
-export async function getAuditLogsHandler(req: Request, res: Response): Promise<void> {
-  const parsed = auditLogQuerySchema.safeParse(req.query);
+export async function listDisputes(req: AdminRequest, res: Response): Promise<void> {
+  const page = Math.max(1, Number(req.query.page ?? 1));
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 20)));
+  const offset = (page - 1) * limit;
+
+  const { data, error, count } = await supabase
+    .from('bookings')
+    .select('id, property_id, user_id, status, check_in, check_out, total_price, created_at', { count: 'exact' })
+    .eq('status', 'disputed')
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  if (error) {
+    res.status(500).json({ error: { code: 'DB_ERROR', message: error.message } });
+    return;
+  }
+
+  res.json({ data, meta: { page, limit, total: count ?? 0 } });
+}
+
+/**
+ * POST /api/v1/admin/disputes/:id/resolve
+ * Resolve a dispute with a resolution note.
+ */
+export async function resolveDispute(req: AdminRequest, res: Response): Promise<void> {
+  const { id } = req.params;
+
+  const parsed = resolveDisputeSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: 'Invalid parameters', details: parsed.error.flatten().fieldErrors });
+    res.status(400).json({ error: { code: 'VALIDATION_ERROR', details: parsed.error.flatten().fieldErrors } });
     return;
   }
 
-  const { actorId, action, targetType, targetId, limit } = parsed.data;
-  const result = await listAuditLogs({ actorId, action, targetType, targetId, limit });
+  const { resolution_note, outcome } = parsed.data;
 
-  if (!result.success) {
-    res.status(500).json({ error: result.error });
+  const { error } = await supabase
+    .from('bookings')
+    .update({
+      status: 'dispute_resolved',
+      dispute_resolution_note: resolution_note,
+      dispute_resolved_at: new Date().toISOString(),
+      dispute_outcome: outcome ?? null,
+    })
+    .eq('id', id)
+    .eq('status', 'disputed');
+
+  if (error) {
+    res.status(500).json({ error: { code: 'DB_ERROR', message: error.message } });
     return;
   }
 
-  res.json({ data: result.data, meta: { limit } });
+  await auditLogger.log({
+    actorId: req.adminId,
+    action: 'dispute.resolve',
+    resourceType: 'dispute',
+    resourceId: id,
+    ip: req.ip,
+    meta: { resolution_note, outcome },
+  });
+
+  res.json({ message: 'Dispute resolved.', resolution_note, outcome });
+}
+
+// ─── Dashboard ────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/v1/admin/dashboard
+ * Aggregate stats + recent security events.
+ */
+export async function getDashboard(req: AdminRequest, res: Response): Promise<void> {
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  const [usersResult, propertiesResult, bookingsThisWeekResult, disputesResult, recentAuditResult] =
+    await Promise.all([
+      supabase.from('users').select('id', { count: 'exact', head: true }),
+      supabase.from('properties').select('id', { count: 'exact', head: true }).eq('status', 'active'),
+      supabase
+        .from('bookings')
+        .select('id', { count: 'exact', head: true })
+        .gte('created_at', weekAgo),
+      supabase
+        .from('bookings')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'disputed'),
+      supabase
+        .from('audit_logs')
+        .select('id, timestamp, actor_id, action, resource_type, resource_id, ip')
+        .order('timestamp', { ascending: false })
+        .limit(10),
+    ]);
+
+  res.json({
+    data: {
+      totalUsers: usersResult.count ?? 0,
+      activeListings: propertiesResult.count ?? 0,
+      bookingsThisWeek: bookingsThisWeekResult.count ?? 0,
+      openDisputes: disputesResult.count ?? 0,
+      recentSecurityEvents: recentAuditResult.data ?? [],
+    },
+  });
 }

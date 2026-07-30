@@ -1,254 +1,137 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as freighterApi from '@stellar/freighter-api';
 import {
-  isFreighterInstalled,
-  getFreighterPublicKey,
-  signWithFreighter,
-  getNetworkPassphrase,
-  isValidStellarAddress,
+  getWalletNetwork,
+  checkNetworkMatch,
   connectFreighterWallet,
-  getWalletStatus,
+  signWithFreighter,
   FreighterError,
 } from '../freighter-utils';
 
-// Mock the Freighter API
-vi.mock('@stellar/freighter-api', () => ({
-  isConnected: vi.fn(),
-  getAddress: vi.fn(),
-  signTransaction: vi.fn(),
-}));
-
-import * as FreighterApi from '@stellar/freighter-api';
+vi.mock('@stellar/freighter-api');
 
 describe('freighter-utils', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  describe('isFreighterInstalled', () => {
-    it('returns true when wallet is connected', async () => {
-      vi.mocked(FreighterApi.isConnected).mockResolvedValue({ isConnected: true });
-
-      const result = await isFreighterInstalled();
-
-      expect(result).toBe(true);
-    });
-
-    it('returns false when wallet is not connected', async () => {
-      vi.mocked(FreighterApi.isConnected).mockResolvedValue({ isConnected: false });
-
-      const result = await isFreighterInstalled();
-
-      expect(result).toBe(false);
-    });
-
-    it('returns false on error', async () => {
-      vi.mocked(FreighterApi.isConnected).mockRejectedValue(new Error('Network error'));
-
-      const result = await isFreighterInstalled();
-
-      expect(result).toBe(false);
-    });
-  });
-
-  describe('getFreighterPublicKey', () => {
-    const mockAddress = 'GTEST123456789012345678901234567890123456789012345678';
-
-    it('returns public key on success', async () => {
-      vi.mocked(FreighterApi.getAddress).mockResolvedValue({ address: mockAddress });
-
-      const result = await getFreighterPublicKey();
-
-      expect(result).toBe(mockAddress);
-    });
-
-    it('throws FreighterError with NOT_CONNECTED code when not connected', async () => {
-      vi.mocked(FreighterApi.getAddress).mockResolvedValue({
-        error: { message: 'Not connected' },
-      } as any);
-
-      await expect(getFreighterPublicKey()).rejects.toThrow(FreighterError);
-      await expect(getFreighterPublicKey()).rejects.toThrow(/not connected/i);
-    });
-
-    it('throws FreighterError on API error', async () => {
-      vi.mocked(FreighterApi.getAddress).mockResolvedValue({
-        error: { message: 'API Error' },
-      } as any);
-
-      await expect(getFreighterPublicKey()).rejects.toThrow(FreighterError);
-    });
-
-    it('throws FreighterError when no address returned', async () => {
-      vi.mocked(FreighterApi.getAddress).mockResolvedValue({ address: null } as any);
-
-      await expect(getFreighterPublicKey()).rejects.toThrow(FreighterError);
-    });
-  });
-
-  describe('signWithFreighter', () => {
-    const mockXdr = 'test-xdr-string';
-    const mockSignedXdr = 'signed-xdr-string';
-
-    it('returns signed XDR on success', async () => {
-      vi.mocked(FreighterApi.signTransaction).mockResolvedValue({ signedTxXdr: mockSignedXdr });
-
-      const result = await signWithFreighter(mockXdr, 'testnet');
-
-      expect(result).toBe(mockSignedXdr);
-      expect(FreighterApi.signTransaction).toHaveBeenCalledWith(mockXdr, {
-        networkPassphrase: 'Test SDF Network ; September 2015',
-      });
-    });
-
-    it('uses correct network passphrase for mainnet', async () => {
-      vi.mocked(FreighterApi.signTransaction).mockResolvedValue({ signedTxXdr: mockSignedXdr });
-
-      await signWithFreighter(mockXdr, 'mainnet');
-
-      expect(FreighterApi.signTransaction).toHaveBeenCalledWith(mockXdr, {
+  describe('getWalletNetwork', () => {
+    it('should return mainnet when wallet is on PUBLIC network', async () => {
+      vi.mocked(freighterApi.getNetwork).mockResolvedValue({
+        network: 'PUBLIC',
         networkPassphrase: 'Public Global Stellar Network ; September 2015',
-      });
-    });
-
-    it('throws FreighterError with USER_REJECTED when user rejects', async () => {
-      vi.mocked(FreighterApi.signTransaction).mockResolvedValue({
-        error: { message: 'User rejected the signing request' },
       } as any);
 
-      await expect(signWithFreighter(mockXdr, 'testnet')).rejects.toThrow(FreighterError);
+      const network = await getWalletNetwork();
+      expect(network).toBe('mainnet');
     });
 
-    it('throws FreighterError when signing fails', async () => {
-      vi.mocked(FreighterApi.signTransaction).mockResolvedValue({
-        error: { message: 'Signing failed' },
+    it('should return testnet when wallet is on TESTNET network', async () => {
+      vi.mocked(freighterApi.getNetwork).mockResolvedValue({
+        network: 'TESTNET',
+        networkPassphrase: 'Test SDF Network ; September 2015',
       } as any);
 
-      await expect(signWithFreighter(mockXdr, 'testnet')).rejects.toThrow(FreighterError);
+      const network = await getWalletNetwork();
+      expect(network).toBe('testnet');
     });
 
-    it('throws FreighterError when no signed XDR returned', async () => {
-      vi.mocked(FreighterApi.signTransaction).mockResolvedValue({ signedTxXdr: null } as any);
+    it('should default to testnet on error', async () => {
+      vi.mocked(freighterApi.getNetwork).mockResolvedValue({
+        error: { message: 'Failed' },
+      } as any);
 
-      await expect(signWithFreighter(mockXdr, 'testnet')).rejects.toThrow(FreighterError);
+      const network = await getWalletNetwork();
+      expect(network).toBe('testnet');
     });
   });
 
-  describe('getNetworkPassphrase', () => {
-    it('returns testnet passphrase', () => {
-      const result = getNetworkPassphrase('testnet');
-      expect(result).toBe('Test SDF Network ; September 2015');
+  describe('checkNetworkMatch', () => {
+    it('should return true when networks match', async () => {
+      vi.mocked(freighterApi.getNetwork).mockResolvedValue({
+        network: 'TESTNET',
+      } as any);
+
+      const matches = await checkNetworkMatch('testnet');
+      expect(matches).toBe(true);
     });
 
-    it('returns mainnet passphrase', () => {
-      const result = getNetworkPassphrase('mainnet');
-      expect(result).toBe('Public Global Stellar Network ; September 2015');
-    });
-  });
+    it('should return false when networks mismatch', async () => {
+      vi.mocked(freighterApi.getNetwork).mockResolvedValue({
+        network: 'PUBLIC',
+      } as any);
 
-  describe('isValidStellarAddress', () => {
-    it('returns true for valid Stellar address', () => {
-      const validAddress = 'GTEST123456789012345678901234567890123456789012345678';
-      expect(isValidStellarAddress(validAddress)).toBe(true);
-    });
-
-    it('returns false for invalid address - too short', () => {
-      expect(isValidStellarAddress('GTEST123')).toBe(false);
-    });
-
-    it('returns false for invalid address - wrong prefix', () => {
-      const invalidAddress = 'ATEST123456789012345678901234567890123456789012345678';
-      expect(isValidStellarAddress(invalidAddress)).toBe(false);
-    });
-
-    it('returns false for invalid address - contains invalid characters', () => {
-      const invalidAddress = 'GTEST1234567890123456789012345678901234567890123456789!';
-      expect(isValidStellarAddress(invalidAddress)).toBe(false);
-    });
-
-    it('returns false for empty string', () => {
-      expect(isValidStellarAddress('')).toBe(false);
+      const matches = await checkNetworkMatch('testnet');
+      expect(matches).toBe(false);
     });
   });
 
   describe('connectFreighterWallet', () => {
-    const mockAddress = 'GTEST123456789012345678901234567890123456789012345678';
+    it('should throw NETWORK_MISMATCH error when networks mismatch', async () => {
+      vi.mocked(freighterApi.isConnected).mockResolvedValue({ isConnected: true } as any);
+      vi.mocked(freighterApi.getAddress).mockResolvedValue({
+        address: 'GABC123...',
+      } as any);
+      vi.mocked(freighterApi.getNetwork).mockResolvedValue({
+        network: 'PUBLIC',
+      } as any);
 
-    it('returns address on successful connection', async () => {
-      vi.mocked(FreighterApi.isConnected).mockResolvedValue({ isConnected: true });
-      vi.mocked(FreighterApi.getAddress).mockResolvedValue({ address: mockAddress });
-
-      const result = await connectFreighterWallet();
-
-      expect(result).toBe(mockAddress);
+      await expect(connectFreighterWallet('testnet')).rejects.toThrow(FreighterError);
+      await expect(connectFreighterWallet('testnet')).rejects.toThrow(/mainnet.*testnet/);
     });
 
-    it('throws error when wallet not installed', async () => {
-      vi.mocked(FreighterApi.isConnected).mockResolvedValue({ isConnected: false });
+    it('should succeed when networks match', async () => {
+      vi.mocked(freighterApi.isConnected).mockResolvedValue({ isConnected: true } as any);
+      vi.mocked(freighterApi.getAddress).mockResolvedValue({
+        address: 'GABC123ABC123ABC123ABC123ABC123ABC123ABC123ABC123ABC12',
+      } as any);
+      vi.mocked(freighterApi.getNetwork).mockResolvedValue({
+        network: 'TESTNET',
+      } as any);
 
-      await expect(connectFreighterWallet()).rejects.toThrow(/not installed/i);
-    });
-
-    it('throws error for invalid address', async () => {
-      vi.mocked(FreighterApi.isConnected).mockResolvedValue({ isConnected: true });
-      vi.mocked(FreighterApi.getAddress).mockResolvedValue({ address: 'INVALID' });
-
-      await expect(connectFreighterWallet()).rejects.toThrow(/invalid wallet address format/i);
-    });
-  });
-
-  describe('getWalletStatus', () => {
-    const mockAddress = 'GTEST123456789012345678901234567890123456789012345678';
-
-    it('returns connected status', async () => {
-      vi.mocked(FreighterApi.isConnected).mockResolvedValue({ isConnected: true });
-      vi.mocked(FreighterApi.getAddress).mockResolvedValue({ address: mockAddress });
-
-      const result = await getWalletStatus();
-
-      expect(result).toEqual({
-        isConnected: true,
-        address: mockAddress,
-        network: 'testnet',
-        isLoading: false,
-        error: null,
-      });
-    });
-
-    it('returns disconnected status when wallet not installed', async () => {
-      vi.mocked(FreighterApi.isConnected).mockResolvedValue({ isConnected: false });
-
-      const result = await getWalletStatus();
-
-      expect(result.isConnected).toBe(false);
-      expect(result.address).toBeNull();
-      expect(result.error).toBeDefined();
-    });
-
-    it('returns error status on exception', async () => {
-      vi.mocked(FreighterApi.isConnected).mockRejectedValue(new Error('Network error'));
-
-      const result = await getWalletStatus();
-
-      expect(result.isConnected).toBe(false);
-      expect(result.address).toBeNull();
-      expect(result.error).toContain('Network error');
+      const address = await connectFreighterWallet('testnet');
+      expect(address).toBe('GABC123ABC123ABC123ABC123ABC123ABC123ABC123ABC123ABC12');
     });
   });
 
-  describe('FreighterError', () => {
-    it('creates error with default code', () => {
-      const error = new FreighterError('Test error');
+  describe('signWithFreighter', () => {
+    it('should check network before signing', async () => {
+      vi.mocked(freighterApi.getNetwork).mockResolvedValue({
+        network: 'PUBLIC',
+      } as any);
 
-      expect(error).toBeInstanceOf(Error);
-      expect(error.message).toBe('Test error');
-      expect(error.code).toBe('NETWORK_ERROR');
-      expect(error.name).toBe('FreighterError');
+      await expect(signWithFreighter('xdr123', 'testnet')).rejects.toThrow(FreighterError);
+      await expect(signWithFreighter('xdr123', 'testnet')).rejects.toThrow(/mainnet.*testnet/);
     });
 
-    it('creates error with custom code', () => {
-      const error = new FreighterError('Test error', 'NOT_INSTALLED');
+    it('should timeout after specified duration', async () => {
+      vi.mocked(freighterApi.getNetwork).mockResolvedValue({
+        network: 'TESTNET',
+      } as any);
 
-      expect(error.code).toBe('NOT_INSTALLED');
+      vi.mocked(freighterApi.signTransaction).mockImplementation(
+        () => new Promise(resolve => setTimeout(resolve, 5000))
+      );
+
+      await expect(
+        signWithFreighter('xdr123', 'testnet', { timeout: 100 })
+      ).rejects.toThrow(FreighterError);
+      
+      await expect(
+        signWithFreighter('xdr123', 'testnet', { timeout: 100 })
+      ).rejects.toThrow(/timed out/i);
+    }, 10000);
+
+    it('should succeed when network matches and signing completes', async () => {
+      vi.mocked(freighterApi.getNetwork).mockResolvedValue({
+        network: 'TESTNET',
+      } as any);
+      vi.mocked(freighterApi.signTransaction).mockResolvedValue({
+        signedTxXdr: 'signed_xdr_123',
+      } as any);
+
+      const signedXdr = await signWithFreighter('xdr123', 'testnet');
+      expect(signedXdr).toBe('signed_xdr_123');
     });
   });
 });

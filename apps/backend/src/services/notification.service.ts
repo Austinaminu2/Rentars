@@ -16,6 +16,9 @@ export type NotificationType =
   | 'payment_received'
   | 'booking_reminder'
   | 'review_requested'
+  | 'review_submitted'
+  | 'host_response'
+  | 'dispute_initiated'
   | 'new_property'
   | 'system_alert'
   | 'report_created'
@@ -53,6 +56,9 @@ const EMAIL_TEMPLATES: Partial<Record<NotificationType, string>> = {
   payment_received: 'Payment Received',
   booking_reminder: 'Booking Reminder',
   review_requested: 'Review Requested',
+  review_submitted: 'New Review Submitted',
+  host_response: 'Host Responded to Your Review',
+  dispute_initiated: 'Dispute Initiated',
   new_property: 'New Listing from a Host You Follow',
   system_alert: 'System Alert',
   report_created: 'New Report Submitted',
@@ -167,6 +173,17 @@ export async function deleteNotification(
 
   if (error) return { success: false, error: error.message };
   return { success: true };
+}
+
+export async function deleteAllNotifications(userId: string): Promise<ServiceResponse<number>> {
+  const { data, error } = await supabase
+    .from('notifications')
+    .delete()
+    .eq('user_id', userId)
+    .select('id');
+
+  if (error) return { success: false, error: error.message };
+  return { success: true, data: data?.length ?? 0 };
 }
 
 export async function getPreferences(

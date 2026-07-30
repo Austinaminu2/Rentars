@@ -18,7 +18,7 @@ export const registerSchema = z.object({
 
   password: z
     .string({ required_error: 'password is required' })
-    .min(8, 'password must be at least 8 characters')
+    .min(12, 'password must be at least 12 characters')
     .max(128, 'password must be at most 128 characters')
     .regex(/[A-Z]/, 'password must contain at least one uppercase letter')
     .regex(/[a-z]/, 'password must contain at least one lowercase letter')
@@ -60,10 +60,12 @@ export const confirmPasswordResetSchema = z.object({
   token: z.string({ required_error: 'token is required' }).min(1, 'token is required'),
   password: z
     .string({ required_error: 'password is required' })
-    .min(8, 'password must be at least 8 characters')
+    .min(12, 'password must be at least 12 characters')
     .max(128, 'password must be at most 128 characters')
     .regex(/[A-Z]/, 'password must contain at least one uppercase letter')
-    .regex(/[0-9]/, 'password must contain at least one number'),
+    .regex(/[a-z]/, 'password must contain at least one lowercase letter')
+    .regex(/[0-9]/, 'password must contain at least one number')
+    .regex(/[^A-Za-z0-9]/, 'password must contain at least one special character'),
 });
 
 // ─── Wallet Challenge schema ──────────────────────────────────────────────────

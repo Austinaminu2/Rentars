@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@/tests/utils/test-utils';
 import PropertyImageGallery from '../PropertyImageGallery';
+import type { PropertyImage } from '@/types/property';
 
 // IntersectionObserver is not available in jsdom
 const mockObserve = vi.fn();
@@ -10,10 +11,10 @@ vi.stubGlobal(
   vi.fn(() => ({ observe: mockObserve, disconnect: mockDisconnect })),
 );
 
-const IMAGES = [
-  'https://example.com/img1.jpg',
-  'https://example.com/img2.jpg',
-  'https://example.com/img3.jpg',
+const IMAGES: PropertyImage[] = [
+  { id: '1', url: 'https://example.com/img1.jpg', is_primary: true, display_order: 1 },
+  { id: '2', url: 'https://example.com/img2.jpg', is_primary: false, display_order: 2 },
+  { id: '3', url: 'https://example.com/img3.jpg', is_primary: false, display_order: 3 },
 ];
 
 describe('PropertyImageGallery', () => {
@@ -115,5 +116,15 @@ describe('PropertyImageGallery', () => {
     render(<PropertyImageGallery images={[IMAGES[0]]} title="Beach House" />);
     expect(screen.queryByLabelText('Next image')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Previous image')).not.toBeInTheDocument();
+  });
+
+  it('sorts images with primary first', () => {
+    const unsorted: PropertyImage[] = [
+      { id: 'a', url: 'https://example.com/a.jpg', is_primary: false, display_order: 2 },
+      { id: 'b', url: 'https://example.com/b.jpg', is_primary: true, display_order: 1 },
+      { id: 'c', url: 'https://example.com/c.jpg', is_primary: false, display_order: 3 },
+    ];
+    render(<PropertyImageGallery images={unsorted} title="Test" />);
+    expect(screen.getByText('1 / 3')).toBeInTheDocument();
   });
 });

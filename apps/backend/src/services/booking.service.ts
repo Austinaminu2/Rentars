@@ -14,7 +14,9 @@ import {
 } from '@/blockchain/bookingContract.js';
 import { trustlessWorkClient } from '@/blockchain/trustlessWork.js';
 import { loggingService } from './logging.service.js';
-import { createNotification } from './notification.service.js';
+import { createNotification, getPreferences } from './notification.service.js';
+import { emailService } from './email.service.js';
+import { buildPreferenceUrlForUser } from './preferenceToken.js';
 import { decodeCursor, buildCursorPage } from '../utils/cursor.js';
 import type { CursorPaginatedResult } from './notification.service.js';
 import type { ServiceResponse } from './index.js';
@@ -40,6 +42,15 @@ export interface Booking {
   rules_acknowledged_at?: string | null;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface BookingStatusHistory {
+  id: string;
+  booking_id: string;
+  status: string;
+  changed_by?: string;
+  notes?: string;
+  created_at: string;
 }
 
 export interface CreateBookingInput {
@@ -126,6 +137,30 @@ export class BookingService {
     }
 
     return { success: true, data: data as Booking };
+  }
+
+  /**
+   * Get the status history for a booking.
+   *
+   * @param bookingId - UUID of the booking
+   * @returns ServiceResponse with the status history array
+   */
+  async getBookingStatusHistory(bookingId: string): Promise<ServiceResponse<BookingStatusHistory[]>> {
+    if (!bookingId) {
+      return { success: false, error: 'Booking ID is required' };
+    }
+
+    const { data, error } = await supabase
+      .from('booking_status_history')
+      .select('*')
+      .eq('booking_id', bookingId)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    return { success: true, data: (data ?? []) as BookingStatusHistory[] };
   }
 
   /**
@@ -452,11 +487,17 @@ export class BookingService {
 
     const booking = bookingData as Booking;
 
-    // Notify tenant
+    // Notify tenant (in-app)
     createNotification(tenant_id, 'booking_created', { booking_id: booking.id, property_id }).catch(
       () => {},
     );
     incCounter(bookingsCreatedTotal, { property_id });
+
+    // Send detailed booking confirmation emails (tenant + host) — fire-and-forget,
+    // never block the booking creation response.
+    this.sendBookingEmails(booking, prop, tenant_id).catch((err) =>
+      console.warn('[BookingService] Confirmation email dispatch failed:', err),
+    );
 
     // 8. Create on-chain booking record (non-fatal on failure).
     if (prop.on_chain_id !== undefined && prop.on_chain_id !== null) {
@@ -721,6 +762,247 @@ export class BookingService {
     return { success: true, data: updatedData as Booking };
   }
 
+  // ── Complete ───────────────────────────────────────────────────────────────
+
+  /**
+   * Mark a booking as Completed.
+   *
+   * Allowed transitions: Confirmed → Completed.
+   * Only the tenant (or admin) may complete a booking. Completing releases the
+   * escrow to the host if it hasn't been released yet, then marks the booking
+   * Completed in the DB and on-chain.
+   *
+   * @param bookingId - UUID of the booking to complete
+   * @param userId    - ID of the caller (must be the tenant)
+   */
+  async completeBooking(bookingId: string, userId: string): Promise<ServiceResponse<Booking>> {
+    if (!bookingId) {
+      return { success: false, error: 'Booking ID is required' };
+    }
+
+    const { data: bookingData, error: fetchError } = await supabase
+      .from('bookings')
+      .select('*')
+      .eq('id', bookingId)
+      .single();
+
+    if (fetchError || !bookingData) {
+      return { success: false, error: 'Booking not found' };
+    }
+
+    const booking = bookingData as Booking;
+
+    // State-machine: only Confirmed bookings can be completed
+    if (booking.status === 'Completed') {
+      return { success: false, error: 'Booking is already completed' };
+    }
+    if (booking.status !== 'Confirmed') {
+      return {
+        success: false,
+        error: `Cannot complete a booking in '${booking.status}' status. Only Confirmed bookings can be completed.`,
+      };
+    }
+
+    // Authorisation: only the tenant may mark as completed
+    if (booking.tenant_id && booking.tenant_id !== userId) {
+      return { success: false, error: 'Forbidden: only the tenant can complete a booking' };
+    }
+
+    // Release escrow if still open (idempotent — if already released this is a no-op on TW)
+    if (booking.escrow_id) {
+      loggingService.logBlockchainOperation('releaseEscrowComplete', {
+        bookingId,
+        userId,
+        escrowId: booking.escrow_id,
+      });
+
+      try {
+        await trustlessWorkClient.releaseEscrow(booking.escrow_id, 'Booking completed by tenant');
+      } catch (err) {
+        loggingService.logBlockchainOperation(
+          'releaseEscrowComplete',
+          { bookingId, userId, escrowId: booking.escrow_id },
+          undefined,
+          String(err),
+        );
+        // Log but don't block — the DB transition must still succeed
+        console.warn('[BookingService] Escrow release on complete failed:', err);
+      }
+    }
+
+    // Update DB status
+    const { data: updatedData, error: updateError } = await supabase
+      .from('bookings')
+      .update({ status: 'Completed' })
+      .eq('id', bookingId)
+      .select()
+      .single();
+
+    if (updateError) {
+      return { success: false, error: updateError.message };
+    }
+
+    // Notify tenant
+    if (booking.tenant_id) {
+      createNotification(booking.tenant_id, 'booking_completed', { booking_id: bookingId }).catch(
+        () => {},
+      );
+    }
+
+    // Update on-chain status (non-fatal)
+    if (booking.on_chain_id !== undefined && booking.on_chain_id !== null) {
+      const callerAddress = await fetchStellarAddress(userId);
+      if (callerAddress) {
+        loggingService.logBlockchainOperation('updateBookingStatusOnChain', {
+          bookingId,
+          userId,
+          newStatus: 'Completed',
+        });
+
+        try {
+          await this.blockchain.updateBookingStatusOnChain(
+            BigInt(booking.on_chain_id),
+            'Completed',
+            callerAddress,
+          );
+        } catch (err) {
+          loggingService.logBlockchainOperation(
+            'updateBookingStatusOnChain',
+            { bookingId, userId },
+            undefined,
+            String(err),
+          );
+          console.warn('[BookingService] On-chain complete status update failed:', err);
+        }
+      }
+    }
+
+    return { success: true, data: updatedData as Booking };
+  }
+
+  // ── Dispute ────────────────────────────────────────────────────────────────
+
+  /**
+   * Open a dispute on a booking.
+   *
+   * Allowed transitions: Confirmed → Disputed.
+   * Only the tenant may open a dispute. The escrow is locked (not released)
+   * until an admin resolves the dispute via resolveDispute().
+   *
+   * @param bookingId - UUID of the booking to dispute
+   * @param userId    - ID of the caller (must be the tenant)
+   * @param reason    - Optional human-readable reason for the dispute
+   */
+  async disputeBooking(
+    bookingId: string,
+    userId: string,
+    reason?: string,
+  ): Promise<ServiceResponse<Booking>> {
+    if (!bookingId) {
+      return { success: false, error: 'Booking ID is required' };
+    }
+
+    const { data: bookingData, error: fetchError } = await supabase
+      .from('bookings')
+      .select('*')
+      .eq('id', bookingId)
+      .single();
+
+    if (fetchError || !bookingData) {
+      return { success: false, error: 'Booking not found' };
+    }
+
+    const booking = bookingData as Booking;
+
+    // State-machine: only Confirmed bookings can be disputed
+    if (booking.status === 'Disputed') {
+      return { success: false, error: 'Booking is already in dispute' };
+    }
+    if (booking.status !== 'Confirmed') {
+      return {
+        success: false,
+        error: `Cannot dispute a booking in '${booking.status}' status. Only Confirmed bookings can be disputed.`,
+      };
+    }
+
+    // Authorisation: only the tenant may raise a dispute
+    if (booking.tenant_id && booking.tenant_id !== userId) {
+      return { success: false, error: 'Forbidden: only the tenant can open a dispute' };
+    }
+
+    // Dispute on-chain (advisory — the DB transition is authoritative)
+    if (booking.on_chain_id !== undefined && booking.on_chain_id !== null) {
+      const callerAddress = await fetchStellarAddress(userId);
+      if (callerAddress) {
+        loggingService.logBlockchainOperation('disputeBookingOnChain', {
+          bookingId,
+          userId,
+        });
+
+        try {
+          const { disputeBookingOnChain } = await import('@/blockchain/bookingContract.js');
+          await disputeBookingOnChain(callerAddress, BigInt(booking.on_chain_id));
+        } catch (err) {
+          loggingService.logBlockchainOperation(
+            'disputeBookingOnChain',
+            { bookingId, userId },
+            undefined,
+            String(err),
+          );
+          console.warn('[BookingService] On-chain dispute failed:', err);
+        }
+      }
+    }
+
+    // Update DB status (+ persist dispute reason in a metadata column if available)
+    const updatePayload: Record<string, unknown> = { status: 'Disputed' };
+    if (reason) {
+      updatePayload['dispute_reason'] = reason;
+    }
+
+    const { data: updatedData, error: updateError } = await supabase
+      .from('bookings')
+      .update(updatePayload)
+      .eq('id', bookingId)
+      .select()
+      .single();
+
+    if (updateError) {
+      // Fallback: try without dispute_reason in case column doesn't exist yet
+      if (reason) {
+        const { data: fallback, error: fallbackError } = await supabase
+          .from('bookings')
+          .update({ status: 'Disputed' })
+          .eq('id', bookingId)
+          .select()
+          .single();
+
+        if (fallbackError) {
+          return { success: false, error: fallbackError.message };
+        }
+
+        if (booking.tenant_id) {
+          createNotification(booking.tenant_id, 'booking_disputed', { booking_id: bookingId }).catch(
+            () => {},
+          );
+        }
+
+        return { success: true, data: fallback as Booking };
+      }
+
+      return { success: false, error: updateError.message };
+    }
+
+    // Notify tenant & property owner
+    if (booking.tenant_id) {
+      createNotification(booking.tenant_id, 'booking_disputed', { booking_id: bookingId }).catch(
+        () => {},
+      );
+    }
+
+    return { success: true, data: updatedData as Booking };
+  }
+
   // ── Update / Delete ────────────────────────────────────────────────────────
 
   /**
@@ -772,5 +1054,220 @@ export class BookingService {
     }
 
     return { success: true };
+  }
+
+  // ── Dispute ────────────────────────────────────────────────────────────────
+
+  /**
+   * Raise a dispute on a booking. Only the tenant or host (property owner) may raise a dispute.
+   *
+   * @param bookingId - UUID of the booking
+   * @param userId - UUID of the user raising the dispute
+   * @param reason - Reason for the dispute
+   * @param details - Optional additional details
+   * @returns ServiceResponse with the updated booking
+   */
+  async raiseDispute(
+    bookingId: string,
+    userId: string,
+    reason: string,
+    details?: string
+  ): Promise<ServiceResponse<Booking>> {
+    if (!bookingId) {
+      return { success: false, error: 'Booking ID is required' };
+    }
+
+    if (!userId) {
+      return { success: false, error: 'User ID is required' };
+    }
+
+    // Fetch the booking
+    const { data: bookingData, error: fetchError } = await supabase
+      .from('bookings')
+      .select('*, properties!inner(owner_id)')
+      .eq('id', bookingId)
+      .single();
+
+    if (fetchError || !bookingData) {
+      return { success: false, error: 'Booking not found' };
+    }
+
+    const booking = bookingData as Booking & { properties: { owner_id: string } };
+    const hostId = booking.properties.owner_id;
+
+    // Authorization: only tenant or host may raise dispute
+    if (booking.tenant_id !== userId && hostId !== userId) {
+      return { success: false, error: 'Only the tenant or host may raise a dispute' };
+    }
+
+    // Check booking status
+    if (booking.status === 'Cancelled') {
+      return { success: false, error: 'Cannot dispute a cancelled booking' };
+    }
+
+    if (booking.status === 'Completed') {
+      return { success: false, error: 'Cannot dispute a completed booking' };
+    }
+
+    if ((booking as unknown as { dispute_status?: string }).dispute_status === 'raised') {
+      return { success: false, error: 'A dispute has already been raised for this booking' };
+    }
+
+    // Update booking status to Disputed and dispute_status to raised
+    const { data: updatedData, error: updateError } = await supabase
+      .from('bookings')
+      .update({
+        status: 'Disputed',
+        dispute_status: 'raised',
+      })
+      .eq('id', bookingId)
+      .select()
+      .single();
+
+    if (updateError) {
+      return { success: false, error: updateError.message };
+    }
+
+    // Notify both parties
+    const otherPartyId = booking.tenant_id === userId ? hostId : booking.tenant_id;
+
+    if (booking.tenant_id) {
+      createNotification(booking.tenant_id, 'system_alert', {
+        booking_id: bookingId,
+        message: 'A dispute has been raised on your booking',
+        reason,
+      }).catch(() => {});
+    }
+
+    if (otherPartyId) {
+      createNotification(otherPartyId, 'system_alert', {
+        booking_id: bookingId,
+        message: 'A dispute has been raised on a booking',
+        reason,
+      }).catch(() => {});
+    }
+
+    loggingService.logBlockchainOperation('raiseDispute', {
+      bookingId,
+      userId,
+      reason,
+    });
+
+    return { success: true, data: updatedData as Booking };
+  }
+
+  /**
+   * Resolve a dispute on a booking. Only admins/moderators may resolve disputes.
+   *
+   * @param bookingId - UUID of the booking
+   * @param userId - UUID of the admin resolving the dispute
+   * @param resolution - 'refund_tenant' or 'release_to_host'
+   * @param adminNotes - Optional admin notes
+   * @returns ServiceResponse with the updated booking
+   */
+  async resolveDispute(
+    bookingId: string,
+    userId: string,
+    resolution: 'refund_tenant' | 'release_to_host',
+    adminNotes?: string
+  ): Promise<ServiceResponse<Booking>> {
+    if (!bookingId) {
+      return { success: false, error: 'Booking ID is required' };
+    }
+
+    if (!userId) {
+      return { success: false, error: 'User ID is required' };
+    }
+
+    // TODO: Check if user is an admin/moderator
+    // For now, we'll assume the authorization check happens at the controller level
+
+    // Fetch the booking
+    const { data: bookingData, error: fetchError } = await supabase
+      .from('bookings')
+      .select('*, properties!inner(owner_id)')
+      .eq('id', bookingId)
+      .single();
+
+    if (fetchError || !bookingData) {
+      return { success: false, error: 'Booking not found' };
+    }
+
+    const booking = bookingData as Booking & { properties: { owner_id: string } };
+
+    if ((booking as unknown as { dispute_status?: string }).dispute_status !== 'raised') {
+      return { success: false, error: 'No active dispute on this booking' };
+    }
+
+    // Handle escrow resolution
+    if (booking.escrow_id) {
+      loggingService.logBlockchainOperation('resolveDisputeEscrow', {
+        bookingId,
+        userId,
+        resolution,
+      });
+
+      try {
+        if (resolution === 'release_to_host') {
+          await trustlessWorkClient.releaseEscrow(booking.escrow_id, `Dispute resolved: ${adminNotes ?? 'Released to host'}`);
+        } else {
+          await trustlessWorkClient.cancelEscrow(booking.escrow_id);
+        }
+      } catch (err) {
+        loggingService.logBlockchainOperation(
+          'resolveDisputeEscrow',
+          { bookingId, userId, resolution },
+          undefined,
+          String(err)
+        );
+        return {
+          success: false,
+          error: `Failed to resolve escrow: ${String(err)}`,
+        };
+      }
+    }
+
+    // Update booking
+    const { data: updatedData, error: updateError } = await supabase
+      .from('bookings')
+      .update({
+        status: resolution === 'release_to_host' ? 'Completed' : 'Cancelled',
+        dispute_status: 'resolved',
+      })
+      .eq('id', bookingId)
+      .select()
+      .single();
+
+    if (updateError) {
+      return { success: false, error: updateError.message };
+    }
+
+    // Notify both parties
+    const hostId = booking.properties.owner_id;
+    const resolutionMessage = resolution === 'release_to_host' 
+      ? 'Dispute resolved in favor of host' 
+      : 'Dispute resolved in favor of tenant';
+
+    if (booking.tenant_id) {
+      createNotification(booking.tenant_id, 'system_alert', {
+        booking_id: bookingId,
+        message: resolutionMessage,
+      }).catch(() => {});
+    }
+
+    if (hostId) {
+      createNotification(hostId, 'system_alert', {
+        booking_id: bookingId,
+        message: resolutionMessage,
+      }).catch(() => {});
+    }
+
+    loggingService.logBlockchainOperation('resolveDispute', {
+      bookingId,
+      userId,
+      resolution,
+    });
+
+    return { success: true, data: updatedData as Booking };
   }
 }

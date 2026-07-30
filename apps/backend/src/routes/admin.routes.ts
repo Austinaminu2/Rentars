@@ -7,7 +7,22 @@ import {
   getTopQueriesHandler,
   getZeroResultQueriesHandler,
   getSearchVolumeHandler,
-  getAuditLogsHandler,
+  // User management
+  listUsers,
+  getUserDetail,
+  suspendUser,
+  activateUser,
+  // Property management
+  listAdminProperties,
+  suspendProperty,
+  activateProperty,
+  // Bookings
+  listAdminBookings,
+  // Disputes
+  listDisputes,
+  resolveDispute,
+  // Dashboard
+  getDashboard,
 } from '@/controllers/admin.controller.js';
 
 const router = Router();
@@ -16,6 +31,41 @@ const router = Router();
  * All routes in this file require an admin JWT.
  */
 router.use(requireAdmin);
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+router.get('/dashboard', getDashboard);
+
+// ── User management ───────────────────────────────────────────────────────────
+router.get('/users', listUsers);
+router.get('/users/:id', getUserDetail);
+router.post('/users/:id/suspend', suspendUser);
+router.post('/users/:id/activate', activateUser);
+
+// ── Property management ───────────────────────────────────────────────────────
+router.get('/properties', listAdminProperties);
+router.post('/properties/:id/suspend', suspendProperty);
+router.post('/properties/:id/activate', activateProperty);
+
+// ── Featured listings ─────────────────────────────────────────────────────────
+router.put('/properties/:id/featured', setFeaturedHandler);
+router.delete('/properties/:id/featured', clearFeaturedHandler);
+
+// ── Bookings (admin view) ─────────────────────────────────────────────────────
+router.get('/bookings', listAdminBookings);
+
+// ── Disputes ──────────────────────────────────────────────────────────────────
+router.get('/disputes', listDisputes);
+router.post('/disputes/:id/resolve', resolveDispute);
+
+// ── Rate-limit summary ────────────────────────────────────────────────────────
+router.get('/rate-limits', getRateLimitSummary);
+
+// ── Search analytics dashboard ────────────────────────────────────────────────
+router.get('/analytics/search/top-queries', getTopQueriesHandler);
+router.get('/analytics/search/zero-results', getZeroResultQueriesHandler);
+router.get('/analytics/search/volume', getSearchVolumeHandler);
+
+export default router;
 
 // ── Featured listings ─────────────────────────────────────────────────────────
 

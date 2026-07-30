@@ -20,7 +20,7 @@ export default function ReviewModerationPanel() {
 
   async function load() {
     const token = localStorage.getItem('token');
-    const res = await fetch(`${API_URL}/api/reviews/moderation/flagged`, {
+    const res = await fetch(`${API_URL}/api/v1/reviews/moderation/flagged`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) {
@@ -33,7 +33,7 @@ export default function ReviewModerationPanel() {
 
   async function moderate(reviewId: string, approve: boolean) {
     const token = localStorage.getItem('token');
-    await fetch(`${API_URL}/api/reviews/${reviewId}/moderate`, {
+    await fetch(`${API_URL}/api/v1/reviews/${reviewId}/moderate`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ approve }),

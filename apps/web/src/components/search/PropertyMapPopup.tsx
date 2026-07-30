@@ -19,11 +19,11 @@ export default function PropertyMapPopup({ property, onClick }: PropertyMapPopup
         className="block text-left"
         type="button"
       >
-        <div className="w-64 bg-white rounded-lg shadow-lg border border-gray-100 overflow-hidden">
+          <div className="w-64 bg-white rounded-lg shadow-lg border border-gray-100 overflow-hidden">
           <div className="h-24 bg-gray-100 flex items-center justify-center text-gray-400 text-sm">
             {property.images?.[0] ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={property.images[0]} alt={property.title} className="w-full h-full object-cover" />
+              <img src={property.images[0].url} alt={property.title} className="w-full h-full object-cover" />
             ) : (
               'No image'
             )}

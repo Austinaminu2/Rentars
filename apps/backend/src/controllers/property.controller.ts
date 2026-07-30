@@ -21,7 +21,7 @@ import {
   setAvailabilityRanges,
 } from '@/services/availability.service.js';
 import { trackSearch, getSearchSuggestions, getTrendingSearches, trackSuggestionEvent } from '@/services/searchAnalytics.service.js';
-import { computeZeroResultSuggestions } from '@/services/propertySearch.service.js';
+import { computeZeroResultSuggestions, getPriceHistogram } from '@/services/propertySearch.service.js';
 import { supabase } from '@/config/supabase.js';
 import { redactExactCoordinates } from '@/utils/locationPrivacy.js';
 import type { AuthRequest } from '@/middleware/auth.middleware.js';
@@ -89,8 +89,8 @@ function applyLocationPrivacyToList(properties: Property[]): Record<string, unkn
 // ─── Controllers ──────────────────────────────────────────────────────────────
 
 export async function getProperties(req: Request, res: Response): Promise<void> {
-  const { city, country, min_price, max_price, bedrooms, status } = req.query;
-  const hasFilters = city || country || min_price || max_price || bedrooms || status;
+  const { city, country, min_price, max_price, bedrooms, min_bathrooms, property_type, status } = req.query;
+  const hasFilters = city || country || min_price || max_price || bedrooms || min_bathrooms || property_type || status;
 
   if (hasFilters) {
     const result = await searchProperties({
@@ -99,6 +99,8 @@ export async function getProperties(req: Request, res: Response): Promise<void> 
       min_price: min_price ? Number(min_price) : undefined,
       max_price: max_price ? Number(max_price) : undefined,
       bedrooms: bedrooms ? Number(bedrooms) : undefined,
+      min_bathrooms: min_bathrooms ? Number(min_bathrooms) : undefined,
+      property_type: property_type as string | undefined,
       status: status as string | undefined,
     });
 
@@ -206,6 +208,29 @@ export async function deletePropertyHandler(req: Request, res: Response): Promis
 // ─── Advanced Search ──────────────────────────────────────────────────────────
 
 export async function advancedSearchHandler(req: Request, res: Response): Promise<void> {
+  // Parse property_types: supports ?property_types=Apartment&property_types=House
+  const rawTypes = req.query.property_types;
+  const property_types: string[] | undefined = rawTypes
+    ? (Array.isArray(rawTypes) ? (rawTypes as string[]) : [rawTypes as string])
+    : undefined;
+
+  // Validate property_types if provided
+  const VALID_TYPES = ['Apartment','House','Villa','Condo','Studio','Room','Townhouse','Cabin','Loft','Boat'];
+  if (property_types) {
+    const invalid = property_types.filter((t) => !VALID_TYPES.includes(t));
+    if (invalid.length > 0) {
+      res.status(400).json({ error: `Invalid property_types: ${invalid.join(', ')}. Valid values: ${VALID_TYPES.join(', ')}` });
+      return;
+    }
+  }
+
+  // Validate min_bathrooms
+  const min_bathrooms_raw = req.query.min_bathrooms ? Number(req.query.min_bathrooms) : undefined;
+  if (min_bathrooms_raw !== undefined && (isNaN(min_bathrooms_raw) || min_bathrooms_raw < 0)) {
+    res.status(400).json({ error: 'min_bathrooms must be a non-negative number' });
+    return;
+  }
+
   const filters: AdvancedSearchFilters = {
     query: req.query.q as string,
     city: req.query.city as string,
@@ -213,6 +238,8 @@ export async function advancedSearchHandler(req: Request, res: Response): Promis
     min_price: req.query.min_price ? Number(req.query.min_price) : undefined,
     max_price: req.query.max_price ? Number(req.query.max_price) : undefined,
     bedrooms: req.query.bedrooms ? Number(req.query.bedrooms) : undefined,
+    min_bathrooms: min_bathrooms_raw,
+    property_types,
     guests: req.query.guests ? Number(req.query.guests) : undefined,
     amenities: req.query.amenities
       ? Array.isArray(req.query.amenities)
@@ -236,10 +263,17 @@ export async function advancedSearchHandler(req: Request, res: Response): Promis
   }
 
   const viewerId = (req as AuthRequest).userId;
-  await trackSearch(filters.query || '', result.data.length, viewerId, filters);
+  const { data: resultData, total, page: resultPage, limit: resultLimit, hasMore } = result.data;
+
+  await trackSearch(filters.query || '', resultData.length, viewerId, filters);
+
+  // Compute histogram server-side (price filter excluded) — run in parallel with redaction
+  const [histogramResult] = await Promise.all([
+    getPriceHistogram(filters).catch(() => null),
+  ]);
 
   // Search results are always public — redact coordinates
-  const redacted = result.data.map((p) =>
+  const redacted = resultData.map((p) =>
     redactExactCoordinates(p as { id: string; latitude?: number; longitude?: number }) as unknown as Record<string, unknown>,
   );
 
@@ -248,11 +282,11 @@ export async function advancedSearchHandler(req: Request, res: Response): Promis
     if (suggestions.length > 0) {
       trackSuggestionEvent('offered', suggestions.map((s) => s.type).join(','), filters.query, viewerId).catch(() => {});
     }
-    res.json({ data: redacted, count: 0, page: filters.page, _suggestions: suggestions });
+    res.json({ data: redacted, count: 0, page: filters.page, histogram: histogramResult, _suggestions: suggestions });
     return;
   }
 
-  res.json({ data: redacted, count: redacted.length, page: filters.page });
+  res.json({ data: redacted, count: redacted.length, page: filters.page, histogram: histogramResult });
 }
 
 export async function searchSuggestionsHandler(req: Request, res: Response): Promise<void> {

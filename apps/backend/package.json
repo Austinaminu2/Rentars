@@ -16,6 +16,7 @@
     "test:coverage": "bun test --coverage --coverage-reporter=lcov --coverage-dir=./coverage",
     "test:api": "bash tests/api/simple.test.sh && bash tests/api/endpoints.test.sh && bash tests/api/profile.test.sh",
     "test:docker": "bash tests/docker/integration.test.sh",
+    "test:contract": "bun test tests/contract.test.ts",
     "validate:migrations": "bun run scripts/validate-migrations.ts",
     "db:seed": "bun run database/seed.ts"
   },
@@ -48,6 +49,8 @@
     "@types/node": "^25.9.1",
     "@types/nodemailer": "^8.0.0",
     "@types/supertest": "^7.2.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
     "bun-types": "latest",
     "supertest": "^7.2.2",
     "swagger-jsdoc": "^6.2.8",

@@ -5,24 +5,27 @@ import {
   getPublicProfile,
   updateProfile,
   updateStellarAddress,
+  computeProfileCompleteness,
 } from '@/services/profile.service.js';
 
 export async function getOwnProfileHandler(req: AuthRequest, res: Response): Promise<void> {
   const result = await getProfile(req.userId!);
-  if (!result.success) {
+  if (!result.success || !result.data) {
     res.status(404).json({ error: result.error });
     return;
   }
-  res.json(result.data);
+  const completeness = computeProfileCompleteness(result.data);
+  res.json({ ...result.data, completeness });
 }
 
 export async function getPublicProfileHandler(req: Request, res: Response): Promise<void> {
   const result = await getPublicProfile(req.params.id);
-  if (!result.success) {
+  if (!result.success || !result.data) {
     res.status(404).json({ error: result.error });
     return;
   }
-  res.json(result.data);
+  const completeness = computeProfileCompleteness(result.data);
+  res.json({ ...result.data, completeness });
 }
 
 export async function updateProfileHandler(req: AuthRequest, res: Response): Promise<void> {

@@ -2,28 +2,22 @@
 
 import { useCallback, useState } from 'react';
 import * as StellarSdk from '@stellar/stellar-sdk';
-import { getNetworkPassphrase, STELLAR_NETWORKS } from '@/lib/network-utils';
-import { signWithFreighter } from '@/lib/freighter-utils';
+import { getNetworkPassphrase, STELLAR_NETWORKS, getExplorerUrl } from '@/lib/network-utils';
+import { signWithFreighter, FreighterError } from '@/lib/freighter-utils';
 import {
   buildEscrowFundingTransaction,
   buildEscrowReleaseTransaction,
 } from '@/lib/stellar-transactions';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+const DEFAULT_SIGNING_TIMEOUT = 60000; // 60 seconds
 
 export type EscrowTxType = 'fund' | 'release';
+export type EscrowTxStatus = 'idle' | 'waiting_signature' | 'submitting' | 'success' | 'error' | 'timeout';
 
 export interface EscrowTransactionResult {
   txHash: string;
   explorerUrl: string;
-}
-
-function getExplorerUrl(txHash: string, network: 'testnet' | 'mainnet') {
-  const base =
-    network === 'mainnet'
-      ? 'https://stellar.expert/explorer/public/tx/'
-      : 'https://stellar.expert/testnet/tx/';
-  return `${base}${txHash}`;
 }
 
 async function submitXdrToHorizon(xdr: string, network: 'testnet' | 'mainnet') {
@@ -35,14 +29,14 @@ async function submitXdrToHorizon(xdr: string, network: 'testnet' | 'mainnet') {
       : STELLAR_NETWORKS.testnet.horizonUrl,
   );
 
-  // Horizon expects signed tx XDR
   const result = await client.submitTransaction(tx);
   return result.hash;
 }
 
 export function useEscrowTransaction(network: 'testnet' | 'mainnet' = 'testnet') {
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [status, setStatus] = useState<EscrowTxStatus>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [canRetry, setCanRetry] = useState(false);
 
   const submit = useCallback(
     async (params: {
@@ -51,7 +45,7 @@ export function useEscrowTransaction(network: 'testnet' | 'mainnet' = 'testnet')
       amount?: string | number;
       tenantPublicKey?: string;
       ownerPublicKey?: string;
-      retryCount?: number;
+      signingTimeout?: number;
     }): Promise<EscrowTransactionResult> => {
       const {
         type,
@@ -59,76 +53,102 @@ export function useEscrowTransaction(network: 'testnet' | 'mainnet' = 'testnet')
         amount,
         tenantPublicKey,
         ownerPublicKey,
-        retryCount = 3,
+        signingTimeout = DEFAULT_SIGNING_TIMEOUT,
       } = params;
 
-      setIsSubmitting(true);
+      setStatus('idle');
       setError(null);
+      setCanRetry(false);
 
-      let lastErr: unknown = null;
-      for (let attempt = 0; attempt < retryCount; attempt++) {
-        try {
-          const { xdr } =
-            type === 'fund'
-              ? buildEscrowFundingTransaction(
-                  escrowId,
-                  amount ?? '0',
-                  tenantPublicKey ?? '',
-                  network,
-                )
-              : buildEscrowReleaseTransaction(
-                  escrowId,
-                  ownerPublicKey ?? '',
-                  network,
-                );
+      try {
+        const { xdr } =
+          type === 'fund'
+            ? buildEscrowFundingTransaction(
+                escrowId,
+                amount ?? '0',
+                tenantPublicKey ?? '',
+                network,
+              )
+            : buildEscrowReleaseTransaction(
+                escrowId,
+                ownerPublicKey ?? '',
+                network,
+              );
 
-          // Sign via Freighter
-          const signedXdr = await signWithFreighter(xdr, getNetworkPassphrase(network));
+        // Sign via Freighter with timeout
+        setStatus('waiting_signature');
+        const signedXdr = await signWithFreighter(xdr, network, { timeout: signingTimeout });
 
-          // Submit to Stellar network
-          const txHash = await submitXdrToHorizon(signedXdr, network);
+        // Submit to Stellar network
+        setStatus('submitting');
+        const txHash = await submitXdrToHorizon(signedXdr, network);
 
-          // Optionally notify backend that tx has been submitted.
-          // TrustlessWork backend may need txHash to proceed.
-          if (type === 'fund') {
-            await fetch(`${API_URL}/api/v1/bookings/escrow/${escrowId}/fund`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                amount: String(amount ?? '0'),
-                txHash,
-              }),
-            });
-          } else {
-            await fetch(`${API_URL}/api/v1/bookings/escrow/${escrowId}/release`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                reason: 'Release signed by owner',
-                txHash,
-              }),
-            });
-          }
-
-          return {
-            txHash,
-            explorerUrl: getExplorerUrl(txHash, network),
-          };
-        } catch (err) {
-          lastErr = err;
-          // basic backoff before retry
-          await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+        // Notify backend
+        if (type === 'fund') {
+          await fetch(`${API_URL}/api/v1/bookings/escrow/${escrowId}/fund`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              amount: String(amount ?? '0'),
+              txHash,
+            }),
+          });
+        } else {
+          await fetch(`${API_URL}/api/v1/bookings/escrow/${escrowId}/release`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              reason: 'Release signed by owner',
+              txHash,
+            }),
+          });
         }
-      }
 
-      const msg =
-        lastErr instanceof Error ? lastErr.message : 'Failed to submit transaction';
-      setError(msg);
-      throw new Error(msg);
+        setStatus('success');
+        return {
+          txHash,
+          explorerUrl: getExplorerUrl(txHash, network),
+        };
+      } catch (err) {
+        const isFreighterError = err instanceof FreighterError;
+        
+        if (isFreighterError && err.code === 'TIMEOUT') {
+          setStatus('timeout');
+          setError('Signing request timed out. Please check your wallet and try again.');
+          setCanRetry(true);
+        } else if (isFreighterError && err.code === 'USER_REJECTED') {
+          setStatus('error');
+          setError('Transaction was rejected. You can try again when ready.');
+          setCanRetry(true);
+        } else if (isFreighterError && err.code === 'NETWORK_MISMATCH') {
+          setStatus('error');
+          setError(err.message);
+          setCanRetry(false);
+        } else {
+          setStatus('error');
+          setError(err instanceof Error ? err.message : 'Failed to submit transaction');
+          setCanRetry(true);
+        }
+
+        throw err;
+      }
     },
     [network],
   );
 
-  return { submit, isSubmitting, error };
+  const reset = useCallback(() => {
+    setStatus('idle');
+    setError(null);
+    setCanRetry(false);
+  }, []);
+
+  return { 
+    submit, 
+    status, 
+    error, 
+    canRetry,
+    reset,
+    isSubmitting: status === 'waiting_signature' || status === 'submitting',
+  };
 }
 

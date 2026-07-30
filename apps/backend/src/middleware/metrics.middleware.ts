@@ -8,7 +8,19 @@
  *   - Default process metrics (memory, CPU, uptime, event-loop lag)
  *   - HTTP request counter  labelled by method / route / status
  *   - HTTP request duration histogram labelled by method / route / status
- *   - Domain event counters: bookings_created, escrow_failures
+ *   - HTTP error rate counter  labelled by method / route / status_class
+ *   - Domain event counters:
+ *       bookings_created_total        — new bookings
+ *       bookings_cancelled_total      — cancelled bookings
+ *       bookings_confirmed_total      — confirmed / approved bookings
+ *       escrow_operations_total       — all escrow calls, labelled by operation
+ *       escrow_failures_total         — failed escrow operations, labelled by operation
+ *       wallet_approvals_total        — Stellar wallet-approval attempts, labelled by outcome
+ *       blockchain_rpc_calls_total    — outbound Stellar/Soroban RPC calls, labelled by method/outcome
+ *       blockchain_rpc_duration_seconds — RPC call latency histogram
+ *       payment_failures_total        — payment / fund-transfer failures, labelled by reason
+ *       client_errors_total           — browser-reported errors forwarded to /api/v1/client-errors
+ *       auth_events_total             — login/logout/register events, labelled by event/outcome
  *
  * The /metrics endpoint is protected by an optional bearer token.
  * Set METRICS_TOKEN in the environment to enable token protection.
@@ -97,7 +109,7 @@ function createHistogram(name: string, help: string, buckets: number[]): Histogr
   return h;
 }
 
-function observeHistogram(histogram: Histogram, labels: Labels, value: number): void {
+export function observeHistogram(histogram: Histogram, labels: Labels, value: number): void {
   const key = labelKey(labels);
   const existing = histogram.values.get(key);
   if (existing) {
@@ -213,7 +225,8 @@ function renderProcessMetrics(): string {
 
 // ── Metrics definitions ───────────────────────────────────────────────────────
 
-// HTTP
+// ── HTTP infrastructure ───────────────────────────────────────────────────────
+
 export const httpRequestsTotal = createCounter(
   'http_requests_total',
   'Total number of HTTP requests, labelled by method, route, and status.',
@@ -225,15 +238,111 @@ export const httpRequestDurationSeconds = createHistogram(
   [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
 );
 
-// Domain events
+/**
+ * 4xx/5xx error rate counter.
+ * Labels: method, route, status_class ("4xx" | "5xx")
+ * Use this to drive "error rate > N%" alerts without scanning every status code.
+ */
+export const httpErrorsTotal = createCounter(
+  'http_errors_total',
+  'Total number of HTTP error responses (4xx and 5xx), labelled by method, route, and status_class.',
+);
+
+// ── Booking domain ────────────────────────────────────────────────────────────
+
 export const bookingsCreatedTotal = createCounter(
   'bookings_created_total',
   'Total number of bookings created.',
 );
 
+export const bookingsCancelledTotal = createCounter(
+  'bookings_cancelled_total',
+  'Total number of bookings cancelled, labelled by initiated_by (guest|host|system).',
+);
+
+export const bookingsConfirmedTotal = createCounter(
+  'bookings_confirmed_total',
+  'Total number of bookings confirmed / approved by the host.',
+);
+
+// ── Escrow / payment domain ───────────────────────────────────────────────────
+
+/**
+ * All escrow operations attempted.
+ * Labels: operation (create|release|dispute|refund)
+ */
+export const escrowOperationsTotal = createCounter(
+  'escrow_operations_total',
+  'Total number of escrow operations attempted, labelled by operation type.',
+);
+
+/**
+ * Escrow operations that failed.
+ * Labels: operation (create|release|dispute|refund)
+ */
 export const escrowFailuresTotal = createCounter(
   'escrow_failures_total',
-  'Total number of escrow operation failures.',
+  'Total number of escrow operation failures, labelled by operation type.',
+);
+
+/**
+ * Payment / fund-transfer failures (distinct from escrow — covers direct
+ * Stellar payments that do not go through the escrow contract).
+ * Labels: reason (insufficient_funds|network_error|timeout|unknown)
+ */
+export const paymentFailuresTotal = createCounter(
+  'payment_failures_total',
+  'Total number of payment failures, labelled by failure reason.',
+);
+
+// ── Wallet / blockchain domain ────────────────────────────────────────────────
+
+/**
+ * Stellar wallet approval attempts (Freighter / SEP-7).
+ * Labels: outcome (approved|rejected|timeout|error)
+ */
+export const walletApprovalsTotal = createCounter(
+  'wallet_approvals_total',
+  'Total number of Stellar wallet approval attempts, labelled by outcome.',
+);
+
+/**
+ * Outbound Stellar / Soroban RPC calls.
+ * Labels: method (e.g. simulateTransaction, sendTransaction, getTransaction),
+ *         outcome (success|failure)
+ */
+export const blockchainRpcCallsTotal = createCounter(
+  'blockchain_rpc_calls_total',
+  'Total number of outbound Stellar/Soroban RPC calls, labelled by method and outcome.',
+);
+
+export const blockchainRpcDurationSeconds = createHistogram(
+  'blockchain_rpc_duration_seconds',
+  'Latency of outbound Stellar/Soroban RPC calls in seconds, labelled by method.',
+  [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
+);
+
+// ── Auth domain ───────────────────────────────────────────────────────────────
+
+/**
+ * Authentication events.
+ * Labels: event (login|logout|register|password_reset|wallet_auth),
+ *         outcome (success|failure)
+ */
+export const authEventsTotal = createCounter(
+  'auth_events_total',
+  'Total number of authentication events, labelled by event type and outcome.',
+);
+
+// ── Client-side errors ────────────────────────────────────────────────────────
+
+/**
+ * Browser error reports forwarded to POST /api/v1/client-errors.
+ * Labels: context (error-boundary label from the frontend)
+ */
+export const clientErrorsTotal = createCounter(
+  'client_errors_total',
+  'Total number of client-side errors reported by the browser, labelled by context.',
 );
 
 // ── Route-template normaliser ─────────────────────────────────────────────────
@@ -262,10 +371,11 @@ export function metricsMiddleware(req: Request, res: Response, next: NextFunctio
 
   res.on('finish', () => {
     const route = normaliseRoute(req.path);
+    const status = String(res.statusCode);
     const labels: Labels = {
       method: req.method,
       route,
-      status: String(res.statusCode),
+      status,
     };
 
     incCounter(httpRequestsTotal, labels);
@@ -274,6 +384,16 @@ export function metricsMiddleware(req: Request, res: Response, next: NextFunctio
       labels,
       (performance.now() - startMs) / 1000,
     );
+
+    // Track 4xx / 5xx separately for error-rate alerting
+    if (res.statusCode >= 400) {
+      const statusClass = res.statusCode >= 500 ? '5xx' : '4xx';
+      incCounter(httpErrorsTotal, {
+        method: req.method,
+        route,
+        status_class: statusClass,
+      });
+    }
   });
 
   next();

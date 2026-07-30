@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import {
+  clearAllNotifications,
   getNotificationPreferences,
   getPreferencesByToken,
   listNotifications,
@@ -20,6 +21,9 @@ router.get('/', authenticate, listNotifications);
 
 // PATCH /api/v1/notifications/read-all
 router.patch('/read-all', authenticate, readAllNotifications);
+
+// DELETE /api/v1/notifications/clear-all
+router.delete('/clear-all', authenticate, clearAllNotifications);
 
 // PATCH /api/v1/notifications/:id/read
 router.patch('/:id/read', authenticate, readNotification);

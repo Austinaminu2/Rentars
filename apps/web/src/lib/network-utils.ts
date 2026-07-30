@@ -20,3 +20,22 @@ export function getNetworkConfig(network: 'testnet' | 'mainnet' = 'testnet') {
 export function getNetworkPassphrase(network: 'testnet' | 'mainnet' = 'testnet'): string {
   return STELLAR_NETWORKS[network].passphrase;
 }
+
+/**
+ * Get the expected network from environment configuration
+ */
+export function getExpectedNetwork(): 'testnet' | 'mainnet' {
+  const network = process.env.NEXT_PUBLIC_STELLAR_NETWORK;
+  return network === 'mainnet' ? 'mainnet' : 'testnet';
+}
+
+/**
+ * Get the block explorer URL for a transaction
+ */
+export function getExplorerUrl(txHash: string, network: 'testnet' | 'mainnet'): string {
+  const base =
+    network === 'mainnet'
+      ? 'https://stellar.expert/explorer/public/tx/'
+      : 'https://stellar.expert/explorer/testnet/tx/';
+  return `${base}${txHash}`;
+}

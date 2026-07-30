@@ -3,9 +3,10 @@
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
+import type { PropertyImage } from '@/types/property';
 
 interface PropertyImageGalleryProps {
-  images: string[];
+  images: PropertyImage[];
   title: string;
 }
 
@@ -30,14 +31,20 @@ interface PropertyImageGalleryProps {
  *   flash from unsized `<img>` tags.
  */
 export default function PropertyImageGallery({ images, title }: PropertyImageGalleryProps) {
+  const sorted = [...images].sort((a, b) => {
+    if (a.is_primary && !b.is_primary) return -1;
+    if (!a.is_primary && b.is_primary) return 1;
+    return (a.display_order ?? 0) - (b.display_order ?? 0);
+  });
+  const urls = sorted.map((img) => img.url);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
 
   const goToPrevious = () =>
-    setCurrentIndex((prev) => (prev === 0 ? images.length - 1 : prev - 1));
+    setCurrentIndex((prev) => (prev === 0 ? urls.length - 1 : prev - 1));
 
   const goToNext = () =>
-    setCurrentIndex((prev) => (prev === images.length - 1 ? 0 : prev + 1));
+    setCurrentIndex((prev) => (prev === urls.length - 1 ? 0 : prev + 1));
 
   // Keyboard navigation when lightbox is open.
   useEffect(() => {
@@ -52,7 +59,7 @@ export default function PropertyImageGallery({ images, title }: PropertyImageGal
     // currentIndex intentionally omitted — handlers close over setters, not stale index
   }, [isLightboxOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!images.length) {
+  if (!urls.length) {
     return (
       <div
         className="w-full h-96 bg-gray-200 dark:bg-gray-800 rounded-lg flex items-center justify-center"
@@ -71,7 +78,7 @@ export default function PropertyImageGallery({ images, title }: PropertyImageGal
         layout (description, amenities, sidebar) does not shift.
       */}
       <div className="relative w-full h-96 bg-gray-100 dark:bg-gray-800 rounded-lg overflow-hidden group">
-        {images.map((src, idx) => {
+        {urls.map((src, idx) => {
           const isHero = idx === 0;
           const isVisible = idx === currentIndex;
 
@@ -107,7 +114,7 @@ export default function PropertyImageGallery({ images, title }: PropertyImageGal
           onClick={() => setIsLightboxOpen(true)}
         />
 
-        {images.length > 1 && (
+        {urls.length > 1 && (
           <>
             <button
               type="button"
@@ -134,7 +141,7 @@ export default function PropertyImageGallery({ images, title }: PropertyImageGal
           role="tablist"
           aria-label="Image navigation"
         >
-          {images.map((_, idx) => (
+          {urls.map((_, idx) => (
             <button
               key={idx}
               type="button"
@@ -151,18 +158,18 @@ export default function PropertyImageGallery({ images, title }: PropertyImageGal
 
         {/* Image counter */}
         <span className="absolute top-3 right-3 bg-black/50 text-white text-xs px-2 py-1 rounded z-10">
-          {currentIndex + 1} / {images.length}
+          {currentIndex + 1} / {urls.length}
         </span>
       </div>
 
       {/* ── Thumbnail strip ───────────────────────────────────────────────── */}
-      {images.length > 1 && (
+      {urls.length > 1 && (
         <div
           className="flex gap-2 mt-2 overflow-x-auto pb-1"
           role="list"
           aria-label="Image thumbnails"
         >
-          {images.map((src, idx) => (
+          {urls.map((src, idx) => (
             <button
               key={idx}
               type="button"
@@ -228,7 +235,7 @@ export default function PropertyImageGallery({ images, title }: PropertyImageGal
           */}
           <div className="relative max-w-4xl w-full max-h-[90vh] aspect-video mx-8">
             <Image
-              src={images[currentIndex]}
+              src={urls[currentIndex]}
               alt={`${title} — image ${currentIndex + 1}`}
               fill
               loading="eager"
@@ -248,7 +255,7 @@ export default function PropertyImageGallery({ images, title }: PropertyImageGal
           </button>
 
           <span className="absolute bottom-4 left-1/2 -translate-x-1/2 text-white text-sm bg-black/50 px-3 py-1 rounded">
-            {currentIndex + 1} / {images.length}
+            {currentIndex + 1} / {urls.length}
           </span>
         </div>
       )}

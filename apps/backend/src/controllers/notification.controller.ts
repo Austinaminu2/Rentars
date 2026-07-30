@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import type { AuthRequest } from '../middleware/auth.middleware.js';
 import {
+  deleteAllNotifications,
   deleteNotification,
   getNotifications,
   getNotificationsCursor,
@@ -97,6 +98,21 @@ export async function removeNotification(req: AuthRequest, res: Response): Promi
     return;
   }
   res.status(204).send();
+}
+
+export async function clearAllNotifications(req: AuthRequest, res: Response): Promise<void> {
+  const userId = req.userId;
+  if (!userId) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  const result = await deleteAllNotifications(userId);
+  if (!result.success) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  res.json({ deleted: result.data });
 }
 
 export async function getNotificationPreferences(req: AuthRequest, res: Response): Promise<void> {

@@ -1,6 +1,6 @@
 'use client';
 
-import { CheckCircle, Clock, AlertCircle } from 'lucide-react';
+import { CheckCircle, Clock, AlertCircle, XCircle } from 'lucide-react';
 import type { BlockchainStatus } from '@/services/blockchain';
 
 interface BlockchainStatusBadgeProps {
@@ -12,7 +12,7 @@ export default function BlockchainStatusBadge({ status }: BlockchainStatusBadgeP
     return (
       <div className="flex items-center gap-1 px-2 py-1 bg-yellow-100 text-yellow-700 rounded-full text-xs font-medium">
         <Clock size={12} />
-        Verifying...
+        Pending
       </div>
     );
   }
@@ -22,6 +22,15 @@ export default function BlockchainStatusBadge({ status }: BlockchainStatusBadgeP
       <div className="flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium">
         <CheckCircle size={12} />
         Verified
+      </div>
+    );
+  }
+
+  if (status.failed) {
+    return (
+      <div className="flex items-center gap-1 px-2 py-1 bg-red-100 text-red-700 rounded-full text-xs font-medium">
+        <XCircle size={12} />
+        Failed
       </div>
     );
   }
